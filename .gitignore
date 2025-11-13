@@ -1,7 +1,3 @@
-# Ignore Python and text files on main branch
-*.py
-*.txt
-
 # Python
 __pycache__/
 *.py[cod]
