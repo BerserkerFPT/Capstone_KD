@@ -39,7 +39,7 @@ class Config:
     
     # ===================== Model Configuration =====================
     MODELS = [
-        'vgg16',  # Skip - đã chạy và hoạt động đúng (không có BatchNorm)
+        'vgg16',  
         'resnet18',
         'resnet101',
         'mobilenet_v2',
