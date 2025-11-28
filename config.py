@@ -14,12 +14,12 @@ class Config:
         DATASET_PATH = "/home/student/vuthde181070/dataset/TomatoDataset"
     else:
         # Local environment
-        DATASET_PATH = r"C:\Users\Administrator\Downloads\Tomato Leaf Disease Dataset\TomatoDataset"  # Thay đổi theo đường dẫn dataset trên máy local của bạn
+        DATASET_PATH = r"D:\Capstone\Tomato Leaf Disease Dataset\Tomato Leaf Disease Dataset\TomatoDataset"
     # Train/Val/Test split ratios
     TRAIN_RATIO = 0.7
     VAL_RATIO = 0.15
     TEST_RATIO = 0.15
-    
+        
     # ===================== Training Configuration =====================
     BATCH_SIZE = 32
     NUM_EPOCHS = 200
@@ -27,8 +27,7 @@ class Config:
     WEIGHT_DECAY = 5e-4  # L2 regularization để chống overfitting
     # Kaggle có 2 CPU cores, nên dùng NUM_WORKERS = 2
     # Set to 0 to avoid multiprocessing issues with limited memory
-    # On Windows, use 0-2 workers to avoid memory issues
-    NUM_WORKERS = 2  # 0 = single process (safest), 2 = parallel loading
+    NUM_WORKERS = 2
     
     # Early Stopping
     EARLY_STOPPING_PATIENCE = 15  # Stop if val_loss doesn't improve for 20 epochs
