@@ -12,6 +12,7 @@ from tqdm import tqdm
 from config import Config
 from models import get_model
 from dataset import load_dataset, create_dataloaders
+from visualization import print_dataset_statistics, plot_training_history, plot_patience_period
 
 
 class EarlyStopping:
@@ -226,7 +227,7 @@ def validate(model, val_loader, criterion, device):
     return epoch_loss, epoch_acc
 
 
-def train_model(model_name, train_loader, val_loader, num_classes, device):
+def train_model(model_name, train_loader, val_loader, num_classes, device, class_names=None):
     """
     Train a single model
     
@@ -236,9 +237,11 @@ def train_model(model_name, train_loader, val_loader, num_classes, device):
         val_loader: Validation dataloader
         num_classes: Number of classes
         device: Device to train on
+        class_names: List of class names (optional, for visualization)
     
     Returns:
         checkpoint_manager: CheckpointManager object
+        history: Training history dictionary
     """
     
     print(f"\n{'='*70}")
@@ -275,6 +278,14 @@ def train_model(model_name, train_loader, val_loader, num_classes, device):
     
     best_val_loss = float('inf')
     
+    # Training history for visualization
+    history = {
+        'train_loss': [],
+        'train_acc': [],
+        'val_loss': [],
+        'val_acc': []
+    }
+    
     # Training loop
     for epoch in range(1, Config.NUM_EPOCHS + 1):
         epoch_start_time = time.time()
@@ -284,6 +295,12 @@ def train_model(model_name, train_loader, val_loader, num_classes, device):
         
         # Validate
         val_loss, val_acc = validate(model, val_loader, criterion, device)
+        
+        # Save to history
+        history['train_loss'].append(train_loss)
+        history['train_acc'].append(train_acc)
+        history['val_loss'].append(val_loss)
+        history['val_acc'].append(val_acc)
         
         epoch_time = time.time() - epoch_start_time
         
@@ -317,7 +334,19 @@ def train_model(model_name, train_loader, val_loader, num_classes, device):
     print(f"  Best Val Loss: {best_val_loss:.4f}")
     print(f"  Total checkpoints saved: {len(checkpoint_manager.checkpoints)}")
     
-    return checkpoint_manager
+    # Generate training plots
+    viz_dir = os.path.join(Config.RESULTS_DIR, "visualizations")
+    os.makedirs(viz_dir, exist_ok=True)
+    
+    # Plot full training history
+    history_plot_path = os.path.join(viz_dir, f"{model_name}_training_history.png")
+    plot_training_history(history, model_name, save_path=history_plot_path)
+    
+    # Plot patience period (last N epochs)
+    patience_plot_path = os.path.join(viz_dir, f"{model_name}_patience_period.png")
+    plot_patience_period(history, Config.EARLY_STOPPING_PATIENCE, model_name, save_path=patience_plot_path)
+    
+    return checkpoint_manager, history
 
 
 if __name__ == "__main__":
@@ -350,11 +379,21 @@ if __name__ == "__main__":
     
     num_classes = len(class_names)
     
+    # Display dataset statistics
+    print("\n" + "="*70)
+    print("Dataset Statistics")
+    print("="*70)
+    
+    print_dataset_statistics(train_paths + val_paths + test_paths, 
+                           train_labels + val_labels + test_labels, 
+                           class_names)
+    
     # Train first model as test
-    checkpoint_manager = train_model(
+    checkpoint_manager, history = train_model(
         Config.MODELS[0], 
         train_loader, 
         val_loader, 
         num_classes, 
-        device
+        device,
+        class_names=class_names
     )

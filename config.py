@@ -55,7 +55,7 @@ class Config:
     # Format: [hidden_dim1, hidden_dim2, ..., num_classes]
     # Đơn giản hóa cho dataset nhỏ (~10k ảnh) để tránh overfitting
     CLASSIFIER_CONFIG = [256, 128]  # Giảm từ 3 xuống 2 hidden layers
-    DROPOUT_RATE = 0.5  # Tăng dropout để chống overfitting mạnh hơn
+    DROPOUT_RATE = 0.5  # Tăng dropdown để chống overfitting mạnh hơn
     
     # ===================== Image Configuration =====================
     IMAGE_SIZE = 224

@@ -16,6 +16,7 @@ from config import Config
 from dataset import load_dataset, create_dataloaders
 from train import train_model, CheckpointManager
 from evaluate import evaluate_all_strategies, export_results_to_excel, create_performance_charts
+from visualization import print_dataset_statistics
 
 
 def get_next_run_folder(base_results_dir):
@@ -189,6 +190,15 @@ def main():
     print(f"\n[Step 3/6] Training and evaluating {len(Config.MODELS)} models...")
     print("  Strategy: Train → Evaluate → Save Results → Delete Checkpoints")
     
+    # Display dataset statistics once before training
+    print("\n" + "="*70)
+    print("Dataset Statistics")
+    print("="*70)
+    
+    print_dataset_statistics(train_paths + val_paths + test_paths, 
+                           train_labels + val_labels + test_labels, 
+                           class_names)
+    
     all_model_results = {}
     successfully_processed = []
     
@@ -200,12 +210,13 @@ def main():
         try:
             # 3.1: Train model
             print(f"\n  [3.1] Training {model_name}...")
-            checkpoint_manager = train_model(
+            checkpoint_manager, history = train_model(
                 model_name,
                 train_loader,
                 val_loader,
                 num_classes,
-                device
+                device,
+                class_names=class_names
             )
             print(f"  ✓ Training completed for {model_name}")
             
