@@ -4,7 +4,7 @@ Tests all visualization functions without running actual model training
 """
 import os
 import numpy as np
-from visualization import display_sample_images, print_dataset_statistics, plot_training_history, plot_patience_period
+from visualization import print_dataset_statistics, plot_training_history, plot_patience_period
 
 
 def load_test_dataset(dataset_path):
@@ -101,7 +101,7 @@ def test_visualization_functions():
     print("="*70)
     
     # Configuration
-    DATASET_PATH = r"D:\Rice_photos"
+    DATASET_PATH = r"D:\Capstone\Tomato Leaf Disease Dataset\Tomato Leaf Disease Dataset\TomatoDataset"
     OUTPUT_DIR = "test_visualizations"
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     
