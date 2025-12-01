@@ -14,7 +14,7 @@ class Config:
         DATASET_PATH = "/home/student/vuthde181070/dataset/TomatoDataset"
     else:
         # Local environment
-        DATASET_PATH = r"D:\Capstone\Tomato Leaf Disease Dataset\Tomato Leaf Disease Dataset\TomatoDataset"
+        DATASET_PATH = r"C:\Users\Administrator\Downloads\kaggle\working\ProcessedOriginal"
     # Train/Val/Test split ratios
     TRAIN_RATIO = 0.7
     VAL_RATIO = 0.15
