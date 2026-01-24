@@ -229,7 +229,7 @@ def strategy_1_best_checkpoint(model_name, checkpoint_manager, test_loader, num_
     model.load_state_dict(checkpoint['model_state_dict'])
     model = model.to(device)
     
-    # Save checkpoint if save_dir is provided
+    # SAVE CHECKPOINT: Strategy 1 (best val loss)
     if save_dir:
         os.makedirs(save_dir, exist_ok=True)
         save_path = os.path.join(save_dir, f'strategy1_best_epoch_{epoch}.pth')
@@ -252,6 +252,7 @@ def strategy_1_best_checkpoint(model_name, checkpoint_manager, test_loader, num_
     print(f"    {'='*60}")
     
     return metrics
+
 
 
 def strategy_2_top_k_average(model_name, checkpoint_manager, test_loader, train_loader, num_classes, device, save_dir=None):
@@ -290,7 +291,7 @@ def strategy_2_top_k_average(model_name, checkpoint_manager, test_loader, train_
         print(f"      Updating BatchNorm statistics...")
         update_bn(model, train_loader, device, num_batches=100)
         
-        # Save checkpoint if save_dir is provided
+        # SAVE CHECKPOINT: Strategy 2 (top-k averaged)
         if save_dir:
             os.makedirs(save_dir, exist_ok=True)
             save_path = os.path.join(save_dir, f'strategy2_top_{k}_averaged.pth')
@@ -350,7 +351,7 @@ def strategy_3_last_n_average(model_name, checkpoint_manager, test_loader, train
     print(f"    Updating BatchNorm statistics (this ensures model correctness)...")
     update_bn(model, train_loader, device, num_batches=100)
     
-    # Save checkpoint if save_dir is provided
+    # SAVE CHECKPOINT: Strategy 3 (last N epochs averaged)
     if save_dir:
         os.makedirs(save_dir, exist_ok=True)
         save_path = os.path.join(save_dir, f'strategy3_last_{Config.LAST_N_EPOCHS}_averaged.pth')
