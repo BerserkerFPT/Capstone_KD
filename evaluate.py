@@ -447,7 +447,8 @@ def export_results_to_excel(all_model_results, output_path):
     df = df[column_order]
     
     # Save to Excel
-    df.to_excel(output_path, index=False)
+    csv_path = output_path.replace('.xlsx', '.csv')
+    df.to_csv(csv_path, index=False, sep=',', decimal=',')
     print(f"\n✓ Results exported to: {output_path}")
     
     return df
