@@ -148,8 +148,8 @@ def get_model(model_name, num_classes, freeze_backbone=True):
         # Replace classifier (no BatchNorm)
         model.head.fc = CustomClassifier(in_features, num_classes)
     
-    elif model_name == 'vit_base_patch16_224_in21k':
-        model = timm.create_model('vit_base_patch16_224_in21k', pretrained=True)
+    elif model_name == 'vit_base_patch16_224':
+        model = timm.create_model('vit_base_patch16_224', pretrained=True)
         in_features = model.head.in_features
         # Freeze backbone
         if freeze_backbone:
