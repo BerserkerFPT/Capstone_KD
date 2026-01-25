@@ -48,7 +48,7 @@ class Config:
         'densenet121',
         'efficientnet_b0',
         # 'convnext_tiny',
-        'vit_base_patch16_224_in21k'
+        'vit_base_patch16_224'
         # 'swin_tiny_patch4_window7_224',
         # 'convit_tiny'
     ]
