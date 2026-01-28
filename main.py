@@ -16,6 +16,7 @@ from dataset import load_dataset, create_dataloaders
 from train import train_model
 from evaluate import evaluate_all_strategies, export_results_to_excel, create_performance_charts
 from visualization import print_dataset_statistics
+from save import ExperimentTracker
 
 
 # ============================================================
@@ -132,6 +133,14 @@ def main():
     print(f"📉 Cosine eta_min: {Config.ETA_MIN}")
 
     # ========================================================
+    # Initialize Experiment Tracker
+    # ========================================================
+    tracker = ExperimentTracker()
+    experiment_number = tracker.save_experiment_config(
+        experiment_name=Config.EXPERIMENT_NAME
+    )
+
+    # ========================================================
     # Run folder
     # ========================================================
     run_folder, run_number = get_next_run_folder(Config.RESULTS_DIR)
@@ -203,6 +212,25 @@ def main():
 
             all_results[model_name] = results
             save_model_results(model_name, results, run_folder)
+            
+            # Update experiment tracker with results
+            # Lấy kết quả từ strategy tốt nhất (ví dụ: best_checkpoint)
+            best_strategy_results = results.get('best_checkpoint', {})
+            tracker.update_experiment_results(
+                experiment_number=experiment_number,
+                model_name=model_name,
+                results={
+                    'best_val_acc': best_strategy_results.get('Accuracy (%)', 'N/A'),
+                    'best_val_loss': best_strategy_results.get('Test Loss', 'N/A'),
+                    'test_acc': best_strategy_results.get('Accuracy (%)', 'N/A'),
+                    'test_loss': best_strategy_results.get('Test Loss', 'N/A'),
+                    'precision': best_strategy_results.get('Precision (%)', 'N/A'),
+                    'recall': best_strategy_results.get('Recall (%)', 'N/A'),
+                    'f1_score': best_strategy_results.get('F1-Score (%)', 'N/A'),
+                    'auc': best_strategy_results.get('AUC (%)', 'N/A')
+                }
+            )
+            
             delete_model_checkpoints(model_name, Config.CHECKPOINTS_DIR)
             success_models.append(model_name)
 
@@ -237,6 +265,16 @@ def main():
 
     with open(os.path.join(run_folder, "experiment_info.json"), "w") as f:
         json.dump(info, f, indent=4)
+
+    # ========================================================
+    # Mark experiment as completed and generate summary
+    # ========================================================
+    tracker.mark_experiment_completed(experiment_number)
+    summary_df = tracker.generate_summary_table()
+    
+    # Print experiment summary
+    print(f"\n📊 Experiment #{experiment_number} Summary:")
+    tracker.print_experiment_info(experiment_number)
 
     print("\n✅ PIPELINE COMPLETED SUCCESSFULLY")
     print("=" * 70)
