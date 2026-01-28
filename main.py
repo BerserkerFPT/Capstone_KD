@@ -213,22 +213,47 @@ def main():
             all_results[model_name] = results
             save_model_results(model_name, results, run_folder)
             
-            # Update experiment tracker with results
-            # Lấy kết quả từ strategy tốt nhất (ví dụ: best_checkpoint)
-            best_strategy_results = results.get('best_checkpoint', {})
+            # Update experiment tracker with ALL strategy results
+            # Chuyển đổi results dict thành format phù hợp
+            formatted_results = {}
+            
+            # Lưu tất cả strategies
+            for strategy_name, strategy_metrics in results.items():
+                # Tạo key ngắn gọn hơn cho JSON
+                if strategy_name == 'Strategy 1':
+                    key = 'best_checkpoint'
+                elif strategy_name.startswith('Strategy 2'):
+                    # Extract K value: 'Strategy 2 (K=2)' -> 'top_2_avg'
+                    k_value = strategy_name.split('K=')[1].rstrip(')')
+                    key = f'top_{k_value}_avg'
+                elif strategy_name == 'Strategy 3':
+                    key = f'last_{Config.LAST_N_EPOCHS}_avg'
+                else:
+                    key = strategy_name.lower().replace(' ', '_')
+                
+                formatted_results[key] = {
+                    'test_loss': round(strategy_metrics.get('Test Loss', 0), 4),
+                    'accuracy': round(strategy_metrics.get('Accuracy (%)', 0), 2),
+                    'precision': round(strategy_metrics.get('Precision (%)', 0), 2),
+                    'recall': round(strategy_metrics.get('Recall (%)', 0), 2),
+                    'f1_score': round(strategy_metrics.get('F1-Score (%)', 0), 2),
+                    'auc': round(strategy_metrics.get('AUC (%)', 0), 2)
+                }
+            
+            # Thêm summary của best strategy (Strategy 1)
+            best_strategy_results = results.get('Strategy 1', {})
+            formatted_results['summary'] = {
+                'best_strategy': 'best_checkpoint',
+                'best_val_acc': round(best_strategy_results.get('Accuracy (%)', 0), 2),
+                'best_val_loss': round(best_strategy_results.get('Test Loss', 0), 4),
+                'best_test_acc': round(best_strategy_results.get('Accuracy (%)', 0), 2),
+                'best_test_loss': round(best_strategy_results.get('Test Loss', 0), 4),
+            }
+            
             tracker.update_experiment_results(
                 experiment_number=experiment_number,
                 model_name=model_name,
-                results={
-                    'best_val_acc': best_strategy_results.get('Accuracy (%)', 'N/A'),
-                    'best_val_loss': best_strategy_results.get('Test Loss', 'N/A'),
-                    'test_acc': best_strategy_results.get('Accuracy (%)', 'N/A'),
-                    'test_loss': best_strategy_results.get('Test Loss', 'N/A'),
-                    'precision': best_strategy_results.get('Precision (%)', 'N/A'),
-                    'recall': best_strategy_results.get('Recall (%)', 'N/A'),
-                    'f1_score': best_strategy_results.get('F1-Score (%)', 'N/A'),
-                    'auc': best_strategy_results.get('AUC (%)', 'N/A')
-                }
+                results=formatted_results
             )
             
             delete_model_checkpoints(model_name, Config.CHECKPOINTS_DIR)
