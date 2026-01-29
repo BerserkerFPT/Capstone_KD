@@ -47,10 +47,7 @@ class Config:
         'mobilenet_v2',
         'densenet121',
         'efficientnet_b0',
-        # 'convnext_tiny',
         'vit_base_patch16_224'
-        # 'swin_tiny_patch4_window7_224',
-        # 'convit_tiny'
     ]
     
     # Custom classifier configuration
