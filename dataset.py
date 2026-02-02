@@ -7,10 +7,8 @@ from pathlib import Path
 from collections import defaultdict
 
 import torch
-import numpy as np
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
-import torchvision.transforms.functional as TF
 from PIL import Image
 
 from config import Config
@@ -19,63 +17,6 @@ from config import Config
 def worker_init_fn_seed(worker_id):
     """Worker init function for DataLoader reproducibility (must be at module level for pickle)"""
     random.seed(Config.RANDOM_SEED + worker_id)
-
-
-# =====================================================
-# FAST ADAPTIVE ROTATION (với cache) ⚡
-# =====================================================
-class FastAdaptiveRotation:
-    """
-    Optimized rotation with auto-detect background color from 4 corners.
-    Uses caching to avoid recalculating background color for the same image.
-    
-    Args:
-        degrees: Maximum rotation angle (will rotate between -degrees and +degrees)
-    """
-    def __init__(self, degrees):
-        self.degrees = degrees
-        self._bg_cache = {}  # Cache bg color per image hash
-    
-    def __call__(self, img):
-        """
-        Apply random rotation with adaptive background fill.
-        
-        Args:
-            img: PIL Image
-        
-        Returns:
-            Rotated PIL Image with background color matching original corners
-        """
-        # Convert to numpy for background detection
-        img_np = np.array(img)
-        
-        # Use hash of pixel data as cache key
-        # (id() doesn't work because PIL Image is new each time it's loaded)
-        img_hash = hash(img_np.tobytes())
-        
-        if img_hash not in self._bg_cache:
-            # Calculate background color only once per unique image
-            h, w = img_np.shape[:2]
-            sample_size = min(10, h // 10, w // 10)
-            sample_size = max(1, sample_size)  # Ensure at least 1 pixel
-            
-            corners = [
-                img_np[0:sample_size, 0:sample_size],
-                img_np[0:sample_size, -sample_size:],
-                img_np[-sample_size:, 0:sample_size],
-                img_np[-sample_size:, -sample_size:]
-            ]
-            
-            bg_color = np.mean([np.mean(c, axis=(0, 1)) for c in corners], axis=0)
-            self._bg_cache[img_hash] = tuple(int(x) for x in bg_color)
-        
-        # Random rotation with cached background color
-        angle = np.random.uniform(-self.degrees, self.degrees)
-        return TF.rotate(img, angle, fill=self._bg_cache[img_hash])
-    
-    def clear_cache(self):
-        """Clear the background color cache (useful between epochs if memory is a concern)"""
-        self._bg_cache.clear()
 
 
 class ImageDataset(Dataset):
@@ -118,6 +59,7 @@ class ImageDataset(Dataset):
                 return dummy_image, label
             else:
                 # Without transform, return a tensor of zeros
+                import torch
                 return torch.zeros(3, Config.IMAGE_SIZE, Config.IMAGE_SIZE), label
 
 
@@ -134,12 +76,12 @@ def get_transforms(split='train'):
     
     if split == 'train':
         # Training WITH data augmentation for better generalization
-        # Using FastAdaptiveRotation for smart background fill during rotation
+        # Enable augmentation: Flipping, Rotation, Brightness/Contrast adjustments
         transform = transforms.Compose([
             transforms.Resize((Config.IMAGE_SIZE, Config.IMAGE_SIZE)),
-            transforms.RandomHorizontalFlip(p=0.3),   # 30% chance horizontal flip
+            transforms.RandomHorizontalFlip(p=0.3),  # 30% chance horizontal flip
             transforms.RandomVerticalFlip(p=0.3),     # 30% chance vertical flip
-            FastAdaptiveRotation(degrees=90),         # ⚡ Smart rotation with auto background fill
+            transforms.RandomRotation(degrees=90),    # Random rotation up to 90 degrees
             transforms.ColorJitter(brightness=(0.8, 1.2), contrast=(0.8, 1.2)),  # Color variation
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], 
@@ -335,10 +277,6 @@ if __name__ == "__main__":
     print(f"  Train batches: {len(train_loader)}")
     print(f"  Val batches: {len(val_loader)}")
     print(f"  Test batches: {len(test_loader)}")
-    print(f"\n⚡ Using FastAdaptiveRotation with auto background detection!")
-
-
-
 
 
 
@@ -373,8 +311,10 @@ if __name__ == "__main__":
 # from collections import defaultdict
 
 # import torch
+# import numpy as np
 # from torch.utils.data import Dataset, DataLoader
 # from torchvision import transforms
+# import torchvision.transforms.functional as TF
 # from PIL import Image
 
 # from config import Config
@@ -383,6 +323,63 @@ if __name__ == "__main__":
 # def worker_init_fn_seed(worker_id):
 #     """Worker init function for DataLoader reproducibility (must be at module level for pickle)"""
 #     random.seed(Config.RANDOM_SEED + worker_id)
+
+
+# # =====================================================
+# # FAST ADAPTIVE ROTATION (với cache) ⚡
+# # =====================================================
+# class FastAdaptiveRotation:
+#     """
+#     Optimized rotation with auto-detect background color from 4 corners.
+#     Uses caching to avoid recalculating background color for the same image.
+    
+#     Args:
+#         degrees: Maximum rotation angle (will rotate between -degrees and +degrees)
+#     """
+#     def __init__(self, degrees):
+#         self.degrees = degrees
+#         self._bg_cache = {}  # Cache bg color per image hash
+    
+#     def __call__(self, img):
+#         """
+#         Apply random rotation with adaptive background fill.
+        
+#         Args:
+#             img: PIL Image
+        
+#         Returns:
+#             Rotated PIL Image with background color matching original corners
+#         """
+#         # Convert to numpy for background detection
+#         img_np = np.array(img)
+        
+#         # Use hash of pixel data as cache key
+#         # (id() doesn't work because PIL Image is new each time it's loaded)
+#         img_hash = hash(img_np.tobytes())
+        
+#         if img_hash not in self._bg_cache:
+#             # Calculate background color only once per unique image
+#             h, w = img_np.shape[:2]
+#             sample_size = min(10, h // 10, w // 10)
+#             sample_size = max(1, sample_size)  # Ensure at least 1 pixel
+            
+#             corners = [
+#                 img_np[0:sample_size, 0:sample_size],
+#                 img_np[0:sample_size, -sample_size:],
+#                 img_np[-sample_size:, 0:sample_size],
+#                 img_np[-sample_size:, -sample_size:]
+#             ]
+            
+#             bg_color = np.mean([np.mean(c, axis=(0, 1)) for c in corners], axis=0)
+#             self._bg_cache[img_hash] = tuple(int(x) for x in bg_color)
+        
+#         # Random rotation with cached background color
+#         angle = np.random.uniform(-self.degrees, self.degrees)
+#         return TF.rotate(img, angle, fill=self._bg_cache[img_hash])
+    
+#     def clear_cache(self):
+#         """Clear the background color cache (useful between epochs if memory is a concern)"""
+#         self._bg_cache.clear()
 
 
 # class ImageDataset(Dataset):
@@ -425,7 +422,6 @@ if __name__ == "__main__":
 #                 return dummy_image, label
 #             else:
 #                 # Without transform, return a tensor of zeros
-#                 import torch
 #                 return torch.zeros(3, Config.IMAGE_SIZE, Config.IMAGE_SIZE), label
 
 
@@ -442,12 +438,12 @@ if __name__ == "__main__":
     
 #     if split == 'train':
 #         # Training WITH data augmentation for better generalization
-#         # Enable augmentation: Flipping, Rotation, Brightness/Contrast adjustments
+#         # Using FastAdaptiveRotation for smart background fill during rotation
 #         transform = transforms.Compose([
 #             transforms.Resize((Config.IMAGE_SIZE, Config.IMAGE_SIZE)),
-#             transforms.RandomHorizontalFlip(p=0.3),  # 30% chance horizontal flip
+#             transforms.RandomHorizontalFlip(p=0.3),   # 30% chance horizontal flip
 #             transforms.RandomVerticalFlip(p=0.3),     # 30% chance vertical flip
-#             transforms.RandomRotation(degrees=90),    # Random rotation up to 90 degrees
+#             FastAdaptiveRotation(degrees=90),         # ⚡ Smart rotation with auto background fill
 #             transforms.ColorJitter(brightness=(0.8, 1.2), contrast=(0.8, 1.2)),  # Color variation
 #             transforms.ToTensor(),
 #             transforms.Normalize(mean=[0.485, 0.456, 0.406], 
@@ -643,3 +639,13 @@ if __name__ == "__main__":
 #     print(f"  Train batches: {len(train_loader)}")
 #     print(f"  Val batches: {len(val_loader)}")
 #     print(f"  Test batches: {len(test_loader)}")
+#     print(f"\n⚡ Using FastAdaptiveRotation with auto background detection!")
+
+
+
+
+
+
+
+
+
