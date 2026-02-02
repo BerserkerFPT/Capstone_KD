@@ -16,47 +16,6 @@ from config import Config
 from models import get_model
 
 
-def compute_per_class_metrics(all_labels, all_preds, class_names):
-    """
-    Tính precision, recall, F1-score cho từng class
-    
-    Returns:
-        per_class_metrics: DataFrame với metrics cho từng class
-    """
-    precision_per_class = precision_score(all_labels, all_preds, average=None, zero_division=0) * 100
-    recall_per_class = recall_score(all_labels, all_preds, average=None, zero_division=0) * 100
-    f1_per_class = f1_score(all_labels, all_preds, average=None, zero_division=0) * 100
-    
-    per_class_data = {
-        'Class': class_names,
-        'Precision (%)': precision_per_class,
-        'Recall (%)': recall_per_class,
-        'F1-Score (%)': f1_per_class
-    }
-    
-    return pd.DataFrame(per_class_data)
-
-
-def display_per_class_metrics(per_class_df, indent="    "):
-    """Hiển thị per-class metrics dưới dạng bảng đẹp"""
-    print(f"{indent}{'─'*70}")
-    print(f"{indent}📊 PER-CLASS METRICS:")
-    print(f"{indent}{'─'*70}")
-    print(f"{indent}{'Class':<25} {'Precision':>12} {'Recall':>12} {'F1-Score':>12}")
-    print(f"{indent}{'-'*70}")
-    
-    for _, row in per_class_df.iterrows():
-        print(f"{indent}{row['Class']:<25} {row['Precision (%)']:>11.2f}% {row['Recall (%)']:>11.2f}% {row['F1-Score (%)']:>11.2f}%")
-    
-    avg_precision = per_class_df['Precision (%)'].mean()
-    avg_recall = per_class_df['Recall (%)'].mean()
-    avg_f1 = per_class_df['F1-Score (%)'].mean()
-    
-    print(f"{indent}{'-'*70}")
-    print(f"{indent}{'MACRO AVERAGE':<25} {avg_precision:>11.2f}% {avg_recall:>11.2f}% {avg_f1:>11.2f}%")
-    print(f"{indent}{'─'*70}")
-
-
 def update_bn(model, train_loader, device, num_batches=100):
     """
     Update BatchNorm running statistics after loading averaged weights
@@ -182,13 +141,12 @@ def average_weights(checkpoint_paths, device):
     return averaged_state_dict
 
 
-def evaluate_model(model, test_loader, device, num_classes, class_names):
+def evaluate_model(model, test_loader, device, num_classes):
     """
-    Evaluate model and compute metrics including per-class metrics
+    Evaluate model and compute metrics including test loss
     
     Returns:
-        metrics: Dictionary with overall metrics
-        per_class_metrics: DataFrame with per-class metrics
+        metrics: Dictionary with test_loss, accuracy, precision, recall, f1, auc
     """
     
     model.eval()
@@ -227,7 +185,7 @@ def evaluate_model(model, test_loader, device, num_classes, class_names):
     # Compute test loss
     test_loss = running_loss / total
     
-    # Compute overall metrics
+    # Compute metrics
     accuracy = accuracy_score(all_labels, all_preds) * 100
     precision = precision_score(all_labels, all_preds, average='macro', zero_division=0) * 100
     recall = recall_score(all_labels, all_preds, average='macro', zero_division=0) * 100
@@ -248,19 +206,15 @@ def evaluate_model(model, test_loader, device, num_classes, class_names):
         'AUC (%)': auc
     }
     
-    # Compute per-class metrics
-    per_class_metrics = compute_per_class_metrics(all_labels, all_preds, class_names)
-    
-    return metrics, per_class_metrics
+    return metrics
 
 
-def strategy_1_best_checkpoint(model_name, checkpoint_manager, test_loader, num_classes, class_names, device, save_dir=None):
+def strategy_1_best_checkpoint(model_name, checkpoint_manager, test_loader, num_classes, device, save_dir=None):
     """
     Strategy 1: Evaluate best checkpoint based on lowest val_loss
     
     Returns:
         metrics: Dictionary with evaluation metrics
-        per_class_metrics: DataFrame with per-class metrics
     """
     
     print(f"\n  Strategy 1: Best checkpoint (lowest val_loss)")
@@ -282,8 +236,8 @@ def strategy_1_best_checkpoint(model_name, checkpoint_manager, test_loader, num_
         torch.save({'model_state_dict': model.state_dict(), 'epoch': epoch, 'val_loss': val_loss}, save_path)
         print(f"    ✓ Saved Strategy 1 checkpoint to: {save_path}")
 
-    # Evaluate with per-class metrics
-    metrics, per_class_metrics = evaluate_model(model, test_loader, device, num_classes, class_names)
+    # Evaluate
+    metrics = evaluate_model(model, test_loader, device, num_classes)
     
     # Hiển thị chi tiết kết quả
     print(f"    {'='*60}")
@@ -297,27 +251,22 @@ def strategy_1_best_checkpoint(model_name, checkpoint_manager, test_loader, num_
     print(f"    AUC       : {metrics['AUC (%)']:>6.2f}%")
     print(f"    {'='*60}")
     
-    # Display per-class metrics
-    display_per_class_metrics(per_class_metrics, indent="    ")
-    
-    return metrics, per_class_metrics
+    return metrics
 
 
 
-def strategy_2_top_k_average(model_name, checkpoint_manager, test_loader, train_loader, num_classes, class_names, device, save_dir=None):
+def strategy_2_top_k_average(model_name, checkpoint_manager, test_loader, train_loader, num_classes, device, save_dir=None):
     """
     Strategy 2: Average top-K checkpoints and evaluate
     CRITICAL: Update BatchNorm stats after loading averaged weights
     
     Returns:
         results: Dictionary with k as key and metrics as value
-        per_class_results: Dictionary with k as key and per-class metrics as value
     """
     
     print(f"\n  Strategy 2: Top-K checkpoint averaging")
     
     results = {}
-    per_class_results = {}
     
     for k in Config.TOP_K_VALUES:
         print(f"    K={k}:")
@@ -349,10 +298,9 @@ def strategy_2_top_k_average(model_name, checkpoint_manager, test_loader, train_
             torch.save({'model_state_dict': model.state_dict(), 'k': k}, save_path)
             print(f"      ✓ Saved Strategy 2 (K={k}) checkpoint to: {save_path}")
 
-        # Evaluate with per-class metrics
-        metrics, per_class_metrics = evaluate_model(model, test_loader, device, num_classes, class_names)
+        # Evaluate
+        metrics = evaluate_model(model, test_loader, device, num_classes)
         results[k] = metrics
-        per_class_results[k] = per_class_metrics
         
         # Hiển thị chi tiết kết quả
         print(f"      {'-'*56}")
@@ -365,21 +313,17 @@ def strategy_2_top_k_average(model_name, checkpoint_manager, test_loader, train_
         print(f"      F1-Score  : {metrics['F1-Score (%)']:>6.2f}%")
         print(f"      AUC       : {metrics['AUC (%)']:>6.2f}%")
         print(f"      {'-'*56}")
-        
-        # Display per-class metrics
-        display_per_class_metrics(per_class_metrics, indent="      ")
     
-    return results, per_class_results
+    return results
 
 
-def strategy_3_last_n_average(model_name, checkpoint_manager, test_loader, train_loader, num_classes, class_names, device, save_dir=None):
+def strategy_3_last_n_average(model_name, checkpoint_manager, test_loader, train_loader, num_classes, device, save_dir=None):
     """
     Strategy 3: Average last N epoch checkpoints
     CRITICAL: This is the most important strategy - must update BatchNorm stats!
     
     Returns:
         metrics: Dictionary with evaluation metrics
-        per_class_metrics: DataFrame with per-class metrics
     """
     
     print(f"\n  Strategy 3: Last {Config.LAST_N_EPOCHS} epochs averaging")
@@ -414,8 +358,8 @@ def strategy_3_last_n_average(model_name, checkpoint_manager, test_loader, train
         torch.save({'model_state_dict': model.state_dict(), 'epochs': epochs}, save_path)
         print(f"    ✓ Saved Strategy 3 checkpoint to: {save_path}")
 
-    # Evaluate with per-class metrics
-    metrics, per_class_metrics = evaluate_model(model, test_loader, device, num_classes, class_names)
+    # Evaluate
+    metrics = evaluate_model(model, test_loader, device, num_classes)
     
     # Hiển thị chi tiết kết quả
     print(f"    {'='*60}")
@@ -429,13 +373,10 @@ def strategy_3_last_n_average(model_name, checkpoint_manager, test_loader, train
     print(f"    AUC       : {metrics['AUC (%)']:>6.2f}%")
     print(f"    {'='*60}")
     
-    # Display per-class metrics
-    display_per_class_metrics(per_class_metrics, indent="    ")
-    
-    return metrics, per_class_metrics
+    return metrics
 
 
-def evaluate_all_strategies(model_name, checkpoint_manager, test_loader, train_loader, num_classes, class_names, device, save_dir=None):
+def evaluate_all_strategies(model_name, checkpoint_manager, test_loader, train_loader, num_classes, device, save_dir=None):
     """
     Evaluate all 3 strategies for a model
     
@@ -445,7 +386,6 @@ def evaluate_all_strategies(model_name, checkpoint_manager, test_loader, train_l
     
     Returns:
         all_results: Dictionary with all strategy results
-        all_per_class_results: Dictionary with all per-class results
     """
     
     print(f"\n{'='*70}")
@@ -453,7 +393,6 @@ def evaluate_all_strategies(model_name, checkpoint_manager, test_loader, train_l
     print(f"{'='*70}")
     
     all_results = {}
-    all_per_class_results = {}
     
     # Prepare save directory for checkpoints
     cp_save_dir = None
@@ -462,43 +401,36 @@ def evaluate_all_strategies(model_name, checkpoint_manager, test_loader, train_l
         os.makedirs(cp_save_dir, exist_ok=True)
 
     # Strategy 1: Best single checkpoint (no averaging, no BN update needed)
-    metrics_1, per_class_1 = strategy_1_best_checkpoint(
-        model_name, checkpoint_manager, test_loader, num_classes, class_names, device, save_dir=cp_save_dir
+    all_results['Strategy 1'] = strategy_1_best_checkpoint(
+        model_name, checkpoint_manager, test_loader, num_classes, device, save_dir=cp_save_dir
     )
-    all_results['Strategy 1'] = metrics_1
-    all_per_class_results['Strategy 1'] = per_class_1
     
     # Strategy 2: Top-K averaging (with BN update)
-    strategy_2_results, strategy_2_per_class = strategy_2_top_k_average(
-        model_name, checkpoint_manager, test_loader, train_loader, num_classes, class_names, device, save_dir=cp_save_dir
+    strategy_2_results = strategy_2_top_k_average(
+        model_name, checkpoint_manager, test_loader, train_loader, num_classes, device, save_dir=cp_save_dir
     )
     for k, metrics in strategy_2_results.items():
         all_results[f'Strategy 2 (K={k})'] = metrics
-        all_per_class_results[f'Strategy 2 (K={k})'] = strategy_2_per_class[k]
     
     # Strategy 3: Last N epochs averaging (with BN update - MOST CRITICAL)
-    metrics_3, per_class_3 = strategy_3_last_n_average(
-        model_name, checkpoint_manager, test_loader, train_loader, num_classes, class_names, device, save_dir=cp_save_dir
+    all_results['Strategy 3'] = strategy_3_last_n_average(
+        model_name, checkpoint_manager, test_loader, train_loader, num_classes, device, save_dir=cp_save_dir
     )
-    all_results['Strategy 3'] = metrics_3
-    all_per_class_results['Strategy 3'] = per_class_3
     
-    return all_results, all_per_class_results
+    return all_results
 
 
-def export_results_to_excel(all_model_results, all_per_class_results, output_path, class_names):
+def export_results_to_excel(all_model_results, output_path):
     """
-    Export all results to Excel file with multiple sheets
+    Export all results to Excel file
     
     Args:
         all_model_results: Dictionary with model_name as key and strategy results as value
-        all_per_class_results: Dictionary with per-class metrics
         output_path: Path to save Excel file
-        class_names: List of class names
     """
     
-    # Overall metrics
     rows = []
+    
     for model_name, strategy_results in all_model_results.items():
         for strategy_name, metrics in strategy_results.items():
             row = {
@@ -508,63 +440,33 @@ def export_results_to_excel(all_model_results, all_per_class_results, output_pat
             }
             rows.append(row)
     
-    df_overall = pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
     
     # Reorder columns
     column_order = ['Model', 'Strategy', 'Test Loss', 'Accuracy (%)', 'Precision (%)', 
                    'Recall (%)', 'F1-Score (%)', 'AUC (%)']
-    df_overall = df_overall[column_order]
+    df = df[column_order]
     
-    # Per-class metrics
-    per_class_rows = []
-    for model_name, strategy_results in all_per_class_results.items():
-        for strategy_name, per_class_df in strategy_results.items():
-            for _, row in per_class_df.iterrows():
-                per_class_row = {
-                    'Model': model_name,
-                    'Strategy': strategy_name,
-                    'Class': row['Class'],
-                    'Precision (%)': row['Precision (%)'],
-                    'Recall (%)': row['Recall (%)'],
-                    'F1-Score (%)': row['F1-Score (%)']
-                }
-                per_class_rows.append(per_class_row)
+    # Save to Excel
+    csv_path = output_path.replace('.xlsx', '.csv')
+    df.to_csv(csv_path, index=False, sep=',', decimal=',')
+    print(f"\n✓ Results exported to: {output_path}")
     
-    df_per_class = pd.DataFrame(per_class_rows)
-    
-    # Save to Excel with multiple sheets
-    with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
-        df_overall.to_excel(writer, sheet_name='Overall Metrics', index=False)
-        df_per_class.to_excel(writer, sheet_name='Per-Class Metrics', index=False)
-    
-    # Also save CSV for easier viewing
-    csv_path_overall = output_path.replace('.xlsx', '_overall.csv')
-    csv_path_per_class = output_path.replace('.xlsx', '_per_class.csv')
-    
-    df_overall.to_csv(csv_path_overall, index=False)
-    df_per_class.to_csv(csv_path_per_class, index=False)
-    
-    print(f"\n✓ Results exported to:")
-    print(f"  - Excel: {output_path}")
-    print(f"  - CSV (Overall): {csv_path_overall}")
-    print(f"  - CSV (Per-class): {csv_path_per_class}")
-    
-    return df_overall, df_per_class
+    return df
 
 
-def create_performance_charts(df_overall, df_per_class, output_dir):
+def create_performance_charts(df, output_dir):
     """
-    Create comprehensive performance comparison charts
+    Create single comprehensive performance comparison chart
     
     Args:
-        df_overall: Overall results dataframe
-        df_per_class: Per-class results dataframe
-        output_dir: Directory to save charts
+        df: Results dataframe
+        output_dir: Directory to save chart
     """
     
     os.makedirs(output_dir, exist_ok=True)
     
-    # Chart 1: Overall metrics comparison
+    # Create comprehensive comparison chart
     fig, axes = plt.subplots(2, 3, figsize=(20, 12))
     fig.suptitle('Model Performance Comparison Across All Strategies', 
                  fontsize=16, fontweight='bold')
@@ -576,14 +478,14 @@ def create_performance_charts(df_overall, df_per_class, output_dir):
         ax = axes[idx // 3, idx % 3]
         
         # Prepare data for grouped bar chart
-        models = df_overall['Model'].unique()
-        strategies = df_overall['Strategy'].unique()
+        models = df['Model'].unique()
+        strategies = df['Strategy'].unique()
         
         x = np.arange(len(models))
         width = 0.15
         
         for i, strategy in enumerate(strategies):
-            strategy_data = df_overall[df_overall['Strategy'] == strategy]
+            strategy_data = df[df['Strategy'] == strategy]
             values = [strategy_data[strategy_data['Model'] == model][metric].values[0] 
                      for model in models]
             ax.bar(x + i * width, values, width, label=strategy)
@@ -602,8 +504,8 @@ def create_performance_charts(df_overall, df_per_class, output_dir):
     
     # Find best performing model for each strategy
     summary_text = "Best Models per Strategy:\n\n"
-    for strategy in df_overall['Strategy'].unique():
-        strategy_df = df_overall[df_overall['Strategy'] == strategy]
+    for strategy in df['Strategy'].unique():
+        strategy_df = df[df['Strategy'] == strategy]
         best_idx = strategy_df['F1-Score (%)'].idxmax()
         best_model = strategy_df.loc[best_idx, 'Model']
         best_f1 = strategy_df.loc[best_idx, 'F1-Score (%)']
@@ -617,85 +519,11 @@ def create_performance_charts(df_overall, df_per_class, output_dir):
     plt.savefig(chart_path, dpi=300, bbox_inches='tight')
     plt.close()
     
-    print(f"✓ Overall chart saved to: {chart_path}")
-    
-    # Chart 2: Per-class F1-score heatmap
-    fig, ax = plt.subplots(figsize=(16, 10))
-    
-    # Pivot data for heatmap
-    pivot_data = df_per_class.pivot_table(
-        index='Class',
-        columns=['Model', 'Strategy'],
-        values='F1-Score (%)',
-        aggfunc='mean'
-    )
-    
-    sns.heatmap(pivot_data, annot=True, fmt='.1f', cmap='YlGnBu', ax=ax, 
-                cbar_kws={'label': 'F1-Score (%)'})
-    ax.set_title('Per-Class F1-Score Heatmap', fontsize=14, fontweight='bold')
-    ax.set_xlabel('Model & Strategy', fontsize=12)
-    ax.set_ylabel('Class', fontsize=12)
-    plt.xticks(rotation=45, ha='right')
-    plt.tight_layout()
-    
-    heatmap_path = os.path.join(output_dir, 'per_class_f1_heatmap.png')
-    plt.savefig(heatmap_path, dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    print(f"✓ Per-class heatmap saved to: {heatmap_path}")
+    print(f"✓ Chart saved to: {chart_path}")
 
 
 if __name__ == "__main__":
     print("Evaluation script ready. Run main.py to execute full pipeline.")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # """
@@ -714,6 +542,47 @@ if __name__ == "__main__":
 
 # from config import Config
 # from models import get_model
+
+
+# def compute_per_class_metrics(all_labels, all_preds, class_names):
+#     """
+#     Tính precision, recall, F1-score cho từng class
+    
+#     Returns:
+#         per_class_metrics: DataFrame với metrics cho từng class
+#     """
+#     precision_per_class = precision_score(all_labels, all_preds, average=None, zero_division=0) * 100
+#     recall_per_class = recall_score(all_labels, all_preds, average=None, zero_division=0) * 100
+#     f1_per_class = f1_score(all_labels, all_preds, average=None, zero_division=0) * 100
+    
+#     per_class_data = {
+#         'Class': class_names,
+#         'Precision (%)': precision_per_class,
+#         'Recall (%)': recall_per_class,
+#         'F1-Score (%)': f1_per_class
+#     }
+    
+#     return pd.DataFrame(per_class_data)
+
+
+# def display_per_class_metrics(per_class_df, indent="    "):
+#     """Hiển thị per-class metrics dưới dạng bảng đẹp"""
+#     print(f"{indent}{'─'*70}")
+#     print(f"{indent}📊 PER-CLASS METRICS:")
+#     print(f"{indent}{'─'*70}")
+#     print(f"{indent}{'Class':<25} {'Precision':>12} {'Recall':>12} {'F1-Score':>12}")
+#     print(f"{indent}{'-'*70}")
+    
+#     for _, row in per_class_df.iterrows():
+#         print(f"{indent}{row['Class']:<25} {row['Precision (%)']:>11.2f}% {row['Recall (%)']:>11.2f}% {row['F1-Score (%)']:>11.2f}%")
+    
+#     avg_precision = per_class_df['Precision (%)'].mean()
+#     avg_recall = per_class_df['Recall (%)'].mean()
+#     avg_f1 = per_class_df['F1-Score (%)'].mean()
+    
+#     print(f"{indent}{'-'*70}")
+#     print(f"{indent}{'MACRO AVERAGE':<25} {avg_precision:>11.2f}% {avg_recall:>11.2f}% {avg_f1:>11.2f}%")
+#     print(f"{indent}{'─'*70}")
 
 
 # def update_bn(model, train_loader, device, num_batches=100):
@@ -841,12 +710,13 @@ if __name__ == "__main__":
 #     return averaged_state_dict
 
 
-# def evaluate_model(model, test_loader, device, num_classes):
+# def evaluate_model(model, test_loader, device, num_classes, class_names):
 #     """
-#     Evaluate model and compute metrics including test loss
+#     Evaluate model and compute metrics including per-class metrics
     
 #     Returns:
-#         metrics: Dictionary with test_loss, accuracy, precision, recall, f1, auc
+#         metrics: Dictionary with overall metrics
+#         per_class_metrics: DataFrame with per-class metrics
 #     """
     
 #     model.eval()
@@ -885,7 +755,7 @@ if __name__ == "__main__":
 #     # Compute test loss
 #     test_loss = running_loss / total
     
-#     # Compute metrics
+#     # Compute overall metrics
 #     accuracy = accuracy_score(all_labels, all_preds) * 100
 #     precision = precision_score(all_labels, all_preds, average='macro', zero_division=0) * 100
 #     recall = recall_score(all_labels, all_preds, average='macro', zero_division=0) * 100
@@ -906,15 +776,19 @@ if __name__ == "__main__":
 #         'AUC (%)': auc
 #     }
     
-#     return metrics
+#     # Compute per-class metrics
+#     per_class_metrics = compute_per_class_metrics(all_labels, all_preds, class_names)
+    
+#     return metrics, per_class_metrics
 
 
-# def strategy_1_best_checkpoint(model_name, checkpoint_manager, test_loader, num_classes, device, save_dir=None):
+# def strategy_1_best_checkpoint(model_name, checkpoint_manager, test_loader, num_classes, class_names, device, save_dir=None):
 #     """
 #     Strategy 1: Evaluate best checkpoint based on lowest val_loss
     
 #     Returns:
 #         metrics: Dictionary with evaluation metrics
+#         per_class_metrics: DataFrame with per-class metrics
 #     """
     
 #     print(f"\n  Strategy 1: Best checkpoint (lowest val_loss)")
@@ -936,8 +810,8 @@ if __name__ == "__main__":
 #         torch.save({'model_state_dict': model.state_dict(), 'epoch': epoch, 'val_loss': val_loss}, save_path)
 #         print(f"    ✓ Saved Strategy 1 checkpoint to: {save_path}")
 
-#     # Evaluate
-#     metrics = evaluate_model(model, test_loader, device, num_classes)
+#     # Evaluate with per-class metrics
+#     metrics, per_class_metrics = evaluate_model(model, test_loader, device, num_classes, class_names)
     
 #     # Hiển thị chi tiết kết quả
 #     print(f"    {'='*60}")
@@ -951,22 +825,27 @@ if __name__ == "__main__":
 #     print(f"    AUC       : {metrics['AUC (%)']:>6.2f}%")
 #     print(f"    {'='*60}")
     
-#     return metrics
+#     # Display per-class metrics
+#     display_per_class_metrics(per_class_metrics, indent="    ")
+    
+#     return metrics, per_class_metrics
 
 
 
-# def strategy_2_top_k_average(model_name, checkpoint_manager, test_loader, train_loader, num_classes, device, save_dir=None):
+# def strategy_2_top_k_average(model_name, checkpoint_manager, test_loader, train_loader, num_classes, class_names, device, save_dir=None):
 #     """
 #     Strategy 2: Average top-K checkpoints and evaluate
 #     CRITICAL: Update BatchNorm stats after loading averaged weights
     
 #     Returns:
 #         results: Dictionary with k as key and metrics as value
+#         per_class_results: Dictionary with k as key and per-class metrics as value
 #     """
     
 #     print(f"\n  Strategy 2: Top-K checkpoint averaging")
     
 #     results = {}
+#     per_class_results = {}
     
 #     for k in Config.TOP_K_VALUES:
 #         print(f"    K={k}:")
@@ -998,9 +877,10 @@ if __name__ == "__main__":
 #             torch.save({'model_state_dict': model.state_dict(), 'k': k}, save_path)
 #             print(f"      ✓ Saved Strategy 2 (K={k}) checkpoint to: {save_path}")
 
-#         # Evaluate
-#         metrics = evaluate_model(model, test_loader, device, num_classes)
+#         # Evaluate with per-class metrics
+#         metrics, per_class_metrics = evaluate_model(model, test_loader, device, num_classes, class_names)
 #         results[k] = metrics
+#         per_class_results[k] = per_class_metrics
         
 #         # Hiển thị chi tiết kết quả
 #         print(f"      {'-'*56}")
@@ -1013,17 +893,21 @@ if __name__ == "__main__":
 #         print(f"      F1-Score  : {metrics['F1-Score (%)']:>6.2f}%")
 #         print(f"      AUC       : {metrics['AUC (%)']:>6.2f}%")
 #         print(f"      {'-'*56}")
+        
+#         # Display per-class metrics
+#         display_per_class_metrics(per_class_metrics, indent="      ")
     
-#     return results
+#     return results, per_class_results
 
 
-# def strategy_3_last_n_average(model_name, checkpoint_manager, test_loader, train_loader, num_classes, device, save_dir=None):
+# def strategy_3_last_n_average(model_name, checkpoint_manager, test_loader, train_loader, num_classes, class_names, device, save_dir=None):
 #     """
 #     Strategy 3: Average last N epoch checkpoints
 #     CRITICAL: This is the most important strategy - must update BatchNorm stats!
     
 #     Returns:
 #         metrics: Dictionary with evaluation metrics
+#         per_class_metrics: DataFrame with per-class metrics
 #     """
     
 #     print(f"\n  Strategy 3: Last {Config.LAST_N_EPOCHS} epochs averaging")
@@ -1058,8 +942,8 @@ if __name__ == "__main__":
 #         torch.save({'model_state_dict': model.state_dict(), 'epochs': epochs}, save_path)
 #         print(f"    ✓ Saved Strategy 3 checkpoint to: {save_path}")
 
-#     # Evaluate
-#     metrics = evaluate_model(model, test_loader, device, num_classes)
+#     # Evaluate with per-class metrics
+#     metrics, per_class_metrics = evaluate_model(model, test_loader, device, num_classes, class_names)
     
 #     # Hiển thị chi tiết kết quả
 #     print(f"    {'='*60}")
@@ -1073,10 +957,13 @@ if __name__ == "__main__":
 #     print(f"    AUC       : {metrics['AUC (%)']:>6.2f}%")
 #     print(f"    {'='*60}")
     
-#     return metrics
+#     # Display per-class metrics
+#     display_per_class_metrics(per_class_metrics, indent="    ")
+    
+#     return metrics, per_class_metrics
 
 
-# def evaluate_all_strategies(model_name, checkpoint_manager, test_loader, train_loader, num_classes, device, save_dir=None):
+# def evaluate_all_strategies(model_name, checkpoint_manager, test_loader, train_loader, num_classes, class_names, device, save_dir=None):
 #     """
 #     Evaluate all 3 strategies for a model
     
@@ -1086,6 +973,7 @@ if __name__ == "__main__":
     
 #     Returns:
 #         all_results: Dictionary with all strategy results
+#         all_per_class_results: Dictionary with all per-class results
 #     """
     
 #     print(f"\n{'='*70}")
@@ -1093,6 +981,7 @@ if __name__ == "__main__":
 #     print(f"{'='*70}")
     
 #     all_results = {}
+#     all_per_class_results = {}
     
 #     # Prepare save directory for checkpoints
 #     cp_save_dir = None
@@ -1101,36 +990,43 @@ if __name__ == "__main__":
 #         os.makedirs(cp_save_dir, exist_ok=True)
 
 #     # Strategy 1: Best single checkpoint (no averaging, no BN update needed)
-#     all_results['Strategy 1'] = strategy_1_best_checkpoint(
-#         model_name, checkpoint_manager, test_loader, num_classes, device, save_dir=cp_save_dir
+#     metrics_1, per_class_1 = strategy_1_best_checkpoint(
+#         model_name, checkpoint_manager, test_loader, num_classes, class_names, device, save_dir=cp_save_dir
 #     )
+#     all_results['Strategy 1'] = metrics_1
+#     all_per_class_results['Strategy 1'] = per_class_1
     
 #     # Strategy 2: Top-K averaging (with BN update)
-#     strategy_2_results = strategy_2_top_k_average(
-#         model_name, checkpoint_manager, test_loader, train_loader, num_classes, device, save_dir=cp_save_dir
+#     strategy_2_results, strategy_2_per_class = strategy_2_top_k_average(
+#         model_name, checkpoint_manager, test_loader, train_loader, num_classes, class_names, device, save_dir=cp_save_dir
 #     )
 #     for k, metrics in strategy_2_results.items():
 #         all_results[f'Strategy 2 (K={k})'] = metrics
+#         all_per_class_results[f'Strategy 2 (K={k})'] = strategy_2_per_class[k]
     
 #     # Strategy 3: Last N epochs averaging (with BN update - MOST CRITICAL)
-#     all_results['Strategy 3'] = strategy_3_last_n_average(
-#         model_name, checkpoint_manager, test_loader, train_loader, num_classes, device, save_dir=cp_save_dir
+#     metrics_3, per_class_3 = strategy_3_last_n_average(
+#         model_name, checkpoint_manager, test_loader, train_loader, num_classes, class_names, device, save_dir=cp_save_dir
 #     )
+#     all_results['Strategy 3'] = metrics_3
+#     all_per_class_results['Strategy 3'] = per_class_3
     
-#     return all_results
+#     return all_results, all_per_class_results
 
 
-# def export_results_to_excel(all_model_results, output_path):
+# def export_results_to_excel(all_model_results, all_per_class_results, output_path, class_names):
 #     """
-#     Export all results to Excel file
+#     Export all results to Excel file with multiple sheets
     
 #     Args:
 #         all_model_results: Dictionary with model_name as key and strategy results as value
+#         all_per_class_results: Dictionary with per-class metrics
 #         output_path: Path to save Excel file
+#         class_names: List of class names
 #     """
     
+#     # Overall metrics
 #     rows = []
-    
 #     for model_name, strategy_results in all_model_results.items():
 #         for strategy_name, metrics in strategy_results.items():
 #             row = {
@@ -1140,33 +1036,63 @@ if __name__ == "__main__":
 #             }
 #             rows.append(row)
     
-#     df = pd.DataFrame(rows)
+#     df_overall = pd.DataFrame(rows)
     
 #     # Reorder columns
 #     column_order = ['Model', 'Strategy', 'Test Loss', 'Accuracy (%)', 'Precision (%)', 
 #                    'Recall (%)', 'F1-Score (%)', 'AUC (%)']
-#     df = df[column_order]
+#     df_overall = df_overall[column_order]
     
-#     # Save to Excel
-#     csv_path = output_path.replace('.xlsx', '.csv')
-#     df.to_csv(csv_path, index=False, sep=',', decimal=',')
-#     print(f"\n✓ Results exported to: {output_path}")
+#     # Per-class metrics
+#     per_class_rows = []
+#     for model_name, strategy_results in all_per_class_results.items():
+#         for strategy_name, per_class_df in strategy_results.items():
+#             for _, row in per_class_df.iterrows():
+#                 per_class_row = {
+#                     'Model': model_name,
+#                     'Strategy': strategy_name,
+#                     'Class': row['Class'],
+#                     'Precision (%)': row['Precision (%)'],
+#                     'Recall (%)': row['Recall (%)'],
+#                     'F1-Score (%)': row['F1-Score (%)']
+#                 }
+#                 per_class_rows.append(per_class_row)
     
-#     return df
+#     df_per_class = pd.DataFrame(per_class_rows)
+    
+#     # Save to Excel with multiple sheets
+#     with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+#         df_overall.to_excel(writer, sheet_name='Overall Metrics', index=False)
+#         df_per_class.to_excel(writer, sheet_name='Per-Class Metrics', index=False)
+    
+#     # Also save CSV for easier viewing
+#     csv_path_overall = output_path.replace('.xlsx', '_overall.csv')
+#     csv_path_per_class = output_path.replace('.xlsx', '_per_class.csv')
+    
+#     df_overall.to_csv(csv_path_overall, index=False)
+#     df_per_class.to_csv(csv_path_per_class, index=False)
+    
+#     print(f"\n✓ Results exported to:")
+#     print(f"  - Excel: {output_path}")
+#     print(f"  - CSV (Overall): {csv_path_overall}")
+#     print(f"  - CSV (Per-class): {csv_path_per_class}")
+    
+#     return df_overall, df_per_class
 
 
-# def create_performance_charts(df, output_dir):
+# def create_performance_charts(df_overall, df_per_class, output_dir):
 #     """
-#     Create single comprehensive performance comparison chart
+#     Create comprehensive performance comparison charts
     
 #     Args:
-#         df: Results dataframe
-#         output_dir: Directory to save chart
+#         df_overall: Overall results dataframe
+#         df_per_class: Per-class results dataframe
+#         output_dir: Directory to save charts
 #     """
     
 #     os.makedirs(output_dir, exist_ok=True)
     
-#     # Create comprehensive comparison chart
+#     # Chart 1: Overall metrics comparison
 #     fig, axes = plt.subplots(2, 3, figsize=(20, 12))
 #     fig.suptitle('Model Performance Comparison Across All Strategies', 
 #                  fontsize=16, fontweight='bold')
@@ -1178,14 +1104,14 @@ if __name__ == "__main__":
 #         ax = axes[idx // 3, idx % 3]
         
 #         # Prepare data for grouped bar chart
-#         models = df['Model'].unique()
-#         strategies = df['Strategy'].unique()
+#         models = df_overall['Model'].unique()
+#         strategies = df_overall['Strategy'].unique()
         
 #         x = np.arange(len(models))
 #         width = 0.15
         
 #         for i, strategy in enumerate(strategies):
-#             strategy_data = df[df['Strategy'] == strategy]
+#             strategy_data = df_overall[df_overall['Strategy'] == strategy]
 #             values = [strategy_data[strategy_data['Model'] == model][metric].values[0] 
 #                      for model in models]
 #             ax.bar(x + i * width, values, width, label=strategy)
@@ -1204,8 +1130,8 @@ if __name__ == "__main__":
     
 #     # Find best performing model for each strategy
 #     summary_text = "Best Models per Strategy:\n\n"
-#     for strategy in df['Strategy'].unique():
-#         strategy_df = df[df['Strategy'] == strategy]
+#     for strategy in df_overall['Strategy'].unique():
+#         strategy_df = df_overall[df_overall['Strategy'] == strategy]
 #         best_idx = strategy_df['F1-Score (%)'].idxmax()
 #         best_model = strategy_df.loc[best_idx, 'Model']
 #         best_f1 = strategy_df.loc[best_idx, 'F1-Score (%)']
@@ -1219,7 +1145,32 @@ if __name__ == "__main__":
 #     plt.savefig(chart_path, dpi=300, bbox_inches='tight')
 #     plt.close()
     
-#     print(f"✓ Chart saved to: {chart_path}")
+#     print(f"✓ Overall chart saved to: {chart_path}")
+    
+#     # Chart 2: Per-class F1-score heatmap
+#     fig, ax = plt.subplots(figsize=(16, 10))
+    
+#     # Pivot data for heatmap
+#     pivot_data = df_per_class.pivot_table(
+#         index='Class',
+#         columns=['Model', 'Strategy'],
+#         values='F1-Score (%)',
+#         aggfunc='mean'
+#     )
+    
+#     sns.heatmap(pivot_data, annot=True, fmt='.1f', cmap='YlGnBu', ax=ax, 
+#                 cbar_kws={'label': 'F1-Score (%)'})
+#     ax.set_title('Per-Class F1-Score Heatmap', fontsize=14, fontweight='bold')
+#     ax.set_xlabel('Model & Strategy', fontsize=12)
+#     ax.set_ylabel('Class', fontsize=12)
+#     plt.xticks(rotation=45, ha='right')
+#     plt.tight_layout()
+    
+#     heatmap_path = os.path.join(output_dir, 'per_class_f1_heatmap.png')
+#     plt.savefig(heatmap_path, dpi=300, bbox_inches='tight')
+#     plt.close()
+    
+#     print(f"✓ Per-class heatmap saved to: {heatmap_path}")
 
 
 # if __name__ == "__main__":
