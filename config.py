@@ -81,7 +81,7 @@ class Config:
         RESULTS_DIR = "results"
     
     # Checkpoint management - TỰ ĐỘNG XÓA SAU KHI EVALUATE
-    AUTO_DELETE_CHECKPOINTS = True  # Xóa checkpoints sau khi evaluate xong mỗi model
+    AUTO_DELETE_CHECKPOINTS = False  # Xóa checkpoints sau khi evaluate xong mỗi model
     KEEP_RESULTS = True             # Luôn giữ results (Excel, charts)
     
     # Random seed for reproducibility
