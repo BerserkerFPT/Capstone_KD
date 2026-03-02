@@ -3,195 +3,216 @@ Main script to run complete baseline research pipeline
 """
 import os
 import shutil
-import argparse
-import json
-import random
-import numpy as np
+
+# Force CPU mode if GPU has memory issues
+# os.environ['CUDA_VISIBLE_DEVICES'] = ''  # Uncomment this line to force CPU mode
+os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 import torch
+import json
 import pandas as pd
 from datetime import datetime
 
 from config import Config
 from dataset import load_dataset, create_dataloaders
-from train import train_model
+from train import train_model, CheckpointManager
 from evaluate import evaluate_all_strategies, export_results_to_excel, create_performance_charts
 from visualization import print_dataset_statistics
-from save import ExperimentTracker
 
 
-# ============================================================
-# Utils
-# ============================================================
 def get_next_run_folder(base_results_dir):
+    """
+    Tạo folder mới cho mỗi lần chạy
+    Tự động tăng số thứ tự: results/1/, results/2/, results/3/, ...
+    
+    Args:
+        base_results_dir: Thư mục results gốc
+    
+    Returns:
+        run_folder: Đường dẫn đến folder cho lần chạy này
+        run_number: Số thứ tự lần chạy
+    """
     os.makedirs(base_results_dir, exist_ok=True)
-    runs = [int(d) for d in os.listdir(base_results_dir)
-            if d.isdigit() and os.path.isdir(os.path.join(base_results_dir, d))]
-    run_number = max(runs) + 1 if runs else 1
-    run_folder = os.path.join(base_results_dir, str(run_number))
+    
+    # Tìm tất cả các folder có dạng số
+    existing_runs = []
+    for item in os.listdir(base_results_dir):
+        item_path = os.path.join(base_results_dir, item)
+        if os.path.isdir(item_path) and item.isdigit():
+            existing_runs.append(int(item))
+    
+    # Tìm số tiếp theo
+    if existing_runs:
+        next_run = max(existing_runs) + 1
+    else:
+        next_run = 1
+    
+    # Tạo folder mới
+    run_folder = os.path.join(base_results_dir, str(next_run))
     os.makedirs(run_folder, exist_ok=True)
-    return run_folder, run_number
+    
+    return run_folder, next_run
 
 
 def save_model_results(model_name, results, output_dir):
+    """
+    Save individual model results to Excel and create chart
+    
+    Args:
+        model_name: Name of the model
+        results: Dictionary with strategy results
+        output_dir: Directory to save results
+    """
     model_dir = os.path.join(output_dir, model_name)
     os.makedirs(model_dir, exist_ok=True)
-
+    
+    # Create dataframe for this model
     rows = []
-    for strategy, metrics in results.items():
-        rows.append({
-            "Model": model_name,
-            "Strategy": strategy,
+    for strategy_name, metrics in results.items():
+        row = {
+            'Model': model_name,
+            'Strategy': strategy_name,
             **metrics
-        })
-
+        }
+        rows.append(row)
+    
     df = pd.DataFrame(rows)
-    df = df[
-        ['Model', 'Strategy', 'Test Loss',
-         'Accuracy (%)', 'Precision (%)',
-         'Recall (%)', 'F1-Score (%)', 'AUC (%)']
-    ]
-
-    path = os.path.join(model_dir, f"{model_name}_results.xlsx")
-    df.to_excel(path, index=False)
-    print(f"  ✓ Saved results to {path}")
+    
+    # Reorder columns (including Test Loss)
+    column_order = ['Model', 'Strategy', 'Test Loss', 'Accuracy (%)', 'Precision (%)', 
+                   'Recall (%)', 'F1-Score (%)', 'AUC (%)']
+    df = df[column_order]
+    
+    # Save to Excel
+    excel_path = os.path.join(model_dir, f'{model_name}_results.xlsx')
+    df.to_excel(excel_path, index=False)
+    print(f"  ✓ Results saved to: {excel_path}")
+    
     return df
 
 
-def delete_model_checkpoints(model_name, ckpt_dir):
-    path = os.path.join(ckpt_dir, model_name)
-    if os.path.exists(path):
-        shutil.rmtree(path)
-        print(f"  ✓ Deleted checkpoints: {path}")
+def delete_model_checkpoints(model_name, checkpoints_dir):
+    """
+    Delete all checkpoints for a specific model
+    
+    Args:
+        model_name: Name of the model
+        checkpoints_dir: Base checkpoints directory
+    """
+    model_checkpoint_dir = os.path.join(checkpoints_dir, model_name)
+    
+    if os.path.exists(model_checkpoint_dir):
+        try:
+            shutil.rmtree(model_checkpoint_dir)
+            print(f"  ✓ Deleted checkpoints: {model_checkpoint_dir}")
+        except Exception as e:
+            print(f"  ✗ Error deleting checkpoints: {str(e)}")
+    else:
+        print(f"  ⚠ No checkpoints found at: {model_checkpoint_dir}")
 
 
-# ============================================================
-# Argument Parser
-# ============================================================
-def parse_args():
-    parser = argparse.ArgumentParser("Baseline Research Pipeline")
-
-    # Dataset split
-    parser.add_argument("--train_ratio", type=float, default=Config.TRAIN_RATIO)
-    parser.add_argument("--val_ratio", type=float, default=Config.VAL_RATIO)
-    parser.add_argument("--test_ratio", type=float, default=Config.TEST_RATIO)
-
-    # Training
-    parser.add_argument("--batch_size", type=int, default=Config.BATCH_SIZE)
-    parser.add_argument("--epochs", type=int, default=Config.NUM_EPOCHS)
-    parser.add_argument("--lr", type=float, default=Config.LEARNING_RATE)
-    parser.add_argument("--weight_decay", type=float, default=Config.WEIGHT_DECAY)
-    parser.add_argument("--num_workers", type=int, default=Config.NUM_WORKERS)
-    parser.add_argument("--seed", type=int, default=Config.RANDOM_SEED)
-
-    # Optimization
-    parser.add_argument("--early_stop", type=int, default=Config.EARLY_STOPPING_PATIENCE)
-    parser.add_argument("--lr_decay_patience", type=int, default=Config.LR_DECAY_PATIENCE)
-    parser.add_argument("--lr_decay_factor", type=float, default=Config.LR_DECAY_FACTOR)
-
-    # Scheduler
-    parser.add_argument("--warmup_ratio", type=float, default=0.06)
-    parser.add_argument("--eta_min", type=float, default=Config.ETA_MIN)
-
-    # Model
-    parser.add_argument("--models", nargs="+", default=Config.MODELS)
-    parser.add_argument("--dropout", type=float, default=Config.DROPOUT_RATE)
-
-    # WandB
-    parser.add_argument("--wandb", action="store_true")
-    parser.add_argument("--exp_name", type=str, default=Config.EXPERIMENT_NAME)
-
-    return parser.parse_args()
-
-
-# ============================================================
-# Main
-# ============================================================
 def main():
-    print("\n" + "=" * 70)
+    """
+    Main pipeline (Process each model sequentially to save disk space):
+    1. Validate configuration
+    2. Load and split dataset
+    3. FOR EACH MODEL:
+       - Train model
+       - Evaluate with 3 strategies
+       - Save individual results
+       - Delete checkpoints
+    4. Combine all results to Excel
+    5. Generate combined performance charts
+    """
+    
+    print("\n" + "="*70)
     print(" BASELINE RESEARCH - PRETRAINED MODELS EVALUATION")
-    print("=" * 70)
-
-    # ========================================================
-    # Seed (AFTER override Config)
-    # ========================================================
-    print(f"\n🔒 Setting random seed = {Config.RANDOM_SEED}")
+    print("="*70)
+    
+    # Set random seeds for reproducibility across ALL models
+    print(f"\n🔒 Setting random seeds for reproducibility (seed={Config.RANDOM_SEED})...")
+    import random
+    import numpy as np
     random.seed(Config.RANDOM_SEED)
-    np.random.seed(Config.RANDOM_SEED)
     torch.manual_seed(Config.RANDOM_SEED)
+    np.random.seed(Config.RANDOM_SEED)
     if torch.cuda.is_available():
+        torch.cuda.manual_seed(Config.RANDOM_SEED)
         torch.cuda.manual_seed_all(Config.RANDOM_SEED)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
-    print("✓ Seed set")
-
-    # ========================================================
-    # Validate config
-    # ========================================================
+        # For CUDA reproducibility (may impact performance slightly)
+        torch.backends.cudnn.deterministic = False
+        torch.backends.cudnn.benchmark = True
+    torch.use_deterministic_algorithms(True,warn_only=False)
+    print("✓ Random seeds set successfully")
+    
+    # Step 1: Validate configuration
+    print("\n[Step 1/6] Validating configuration...")
     Config.validate_config()
-
-    print(f"🔥 Warmup epochs: {Config.WARMUP_EPOCHS}/{Config.NUM_EPOCHS}")
-    print(f"📉 Cosine eta_min: {Config.ETA_MIN}")
-
-    # ========================================================
-    # Initialize Experiment Tracker
-    # ========================================================
-    tracker = ExperimentTracker()
-    experiment_number = tracker.save_experiment_config(
-        experiment_name=Config.EXPERIMENT_NAME
-    )
-
-    # ========================================================
-    # Run folder
-    # ========================================================
+    
+    # Tạo folder riêng cho lần chạy này
     run_folder, run_number = get_next_run_folder(Config.RESULTS_DIR)
-    print(f"\n📁 Run #{run_number}: {run_folder}")
-
+    print(f"\n📁 Lần chạy thứ: {run_number}")
+    print(f"📁 Kết quả sẽ được lưu tại: {run_folder}")
+    
+    # Create output directories
     os.makedirs(Config.CHECKPOINTS_DIR, exist_ok=True)
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    # Set device
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
-
-    # ========================================================
-    # Load dataset
-    # ========================================================
-    print("\n[1/6] Loading dataset...")
-    train_p, train_l, val_p, val_l, test_p, test_l, class_names = load_dataset(
+    if torch.cuda.is_available():
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
+    else:
+        print("⚠ Running in CPU mode. Training will be slower but uses less memory.")
+        print("  To enable GPU: Increase Windows virtual memory (paging file) to 16-32GB")
+    
+    # Step 2: Load dataset
+    print("\n[Step 2/6] Loading and splitting dataset...")
+    train_paths, train_labels, val_paths, val_labels, test_paths, test_labels, class_names = load_dataset(
         Config.DATASET_PATH,
         Config.TRAIN_RATIO,
         Config.VAL_RATIO,
         Config.TEST_RATIO,
         Config.RANDOM_SEED
     )
-
+    
     num_classes = len(class_names)
-
+    print(f"Classes: {class_names}")
+    
+    # Create dataloaders
     train_loader, val_loader, test_loader = create_dataloaders(
-        train_p, train_l,
-        val_p, val_l,
-        test_p, test_l,
+        train_paths, train_labels,
+        val_paths, val_labels,
+        test_paths, test_labels,
         Config.BATCH_SIZE,
         Config.NUM_WORKERS
     )
-
-    print_dataset_statistics(
-        train_p + val_p + test_p,
-        train_l + val_l + test_l,
-        class_names
-    )
-
-    # ========================================================
-    # Train + Evaluate
-    # ========================================================
-    all_results = {}
-    success_models = []
-
+    
+    # Step 3: Train and evaluate each model (one at a time to save disk space)
+    print(f"\n[Step 3/6] Training and evaluating {len(Config.MODELS)} models...")
+    print("  Strategy: Train → Evaluate → Save Results → Delete Checkpoints")
+    
+    # Display dataset statistics once before training
+    print("\n" + "="*70)
+    print("Dataset Statistics")
+    print("="*70)
+    
+    print_dataset_statistics(train_paths + val_paths + test_paths, 
+                           train_labels + val_labels + test_labels, 
+                           class_names)
+    
+    all_model_results = {}
+    successfully_processed = []
+    
     for idx, model_name in enumerate(Config.MODELS, 1):
         print(f"\n{'='*70}")
-        print(f"[{idx}/{len(Config.MODELS)}] {model_name}")
+        print(f"[Model {idx}/{len(Config.MODELS)}] Processing: {model_name}")
         print(f"{'='*70}")
-
+        
         try:
-            ckpt_manager, _ = train_model(
+            # 3.1: Train model
+            print(f"\n  [3.1] Training {model_name}...")
+            checkpoint_manager, history = train_model(
                 model_name,
                 train_loader,
                 val_loader,
@@ -199,146 +220,122 @@ def main():
                 device,
                 class_names=class_names
             )
-
+            print(f"  ✓ Training completed for {model_name}")
+            
+            # 3.2: Evaluate with 3 strategies
+            print(f"\n  [3.2] Evaluating {model_name} with 3 strategies...")
             results = evaluate_all_strategies(
                 model_name,
-                ckpt_manager,
+                checkpoint_manager,
                 test_loader,
-                train_loader,
+                train_loader,  # CRITICAL: Pass train_loader for BatchNorm update
                 num_classes,
-                device,
-                save_dir=os.path.join(run_folder, model_name)
+                device
             )
-
-            all_results[model_name] = results
+            all_model_results[model_name] = results
+            print(f"  ✓ Evaluation completed for {model_name}")
+            
+            # 3.3: Save individual model results
+            print(f"\n  [3.3] Saving results for {model_name}...")
             save_model_results(model_name, results, run_folder)
             
-            # Update experiment tracker with ALL strategy results
-            # Chuyển đổi results dict thành format phù hợp
-            formatted_results = {}
-            
-            # Lưu tất cả strategies
-            for strategy_name, strategy_metrics in results.items():
-                # Tạo key ngắn gọn hơn cho JSON
-                if strategy_name == 'Strategy 1':
-                    key = 'best_checkpoint'
-                elif strategy_name.startswith('Strategy 2'):
-                    # Extract K value: 'Strategy 2 (K=2)' -> 'top_2_avg'
-                    k_value = strategy_name.split('K=')[1].rstrip(')')
-                    key = f'top_{k_value}_avg'
-                elif strategy_name == 'Strategy 3':
-                    key = f'last_{Config.LAST_N_EPOCHS}_avg'
-                else:
-                    key = strategy_name.lower().replace(' ', '_')
-                
-                formatted_results[key] = {
-                    'test_loss': round(strategy_metrics.get('Test Loss', 0), 4),
-                    'accuracy': round(strategy_metrics.get('Accuracy (%)', 0), 2),
-                    'precision': round(strategy_metrics.get('Precision (%)', 0), 2),
-                    'recall': round(strategy_metrics.get('Recall (%)', 0), 2),
-                    'f1_score': round(strategy_metrics.get('F1-Score (%)', 0), 2),
-                    'auc': round(strategy_metrics.get('AUC (%)', 0), 2)
-                }
-            
-            # Thêm summary của best strategy (Strategy 1)
-            best_strategy_results = results.get('Strategy 1', {})
-            formatted_results['summary'] = {
-                'best_strategy': 'best_checkpoint',
-                'best_val_acc': round(best_strategy_results.get('Accuracy (%)', 0), 2),
-                'best_val_loss': round(best_strategy_results.get('Test Loss', 0), 4),
-                'best_test_acc': round(best_strategy_results.get('Accuracy (%)', 0), 2),
-                'best_test_loss': round(best_strategy_results.get('Test Loss', 0), 4),
-            }
-            
-            tracker.update_experiment_results(
-                experiment_number=experiment_number,
-                model_name=model_name,
-                results=formatted_results
-            )
-            
+            # 3.4: Delete checkpoints to free disk space
+            print(f"\n  [3.4] Cleaning up checkpoints for {model_name}...")
             delete_model_checkpoints(model_name, Config.CHECKPOINTS_DIR)
-            success_models.append(model_name)
-
+            
+            successfully_processed.append(model_name)
+            print(f"\n  ✅ {model_name} completed successfully!")
+            
         except Exception as e:
-            print(f"✗ Error with {model_name}: {e}")
+            print(f"\n  ✗ Error processing {model_name}: {str(e)}")
+            print(f"  Skipping {model_name} and continuing with next model...")
+            import traceback
+            traceback.print_exc()
             continue
-
-    # ========================================================
-    # Export results
-    # ========================================================
-    print("\n[5/6] Exporting results...")
-    excel_path = os.path.join(run_folder, "all_models_results.xlsx")
-    df = export_results_to_excel(all_results, excel_path)
+    
+    if not all_model_results:
+        print("\n✗ No models processed successfully. Exiting...")
+        return
+    
+    print(f"\n{'='*70}")
+    print(f"✓ Successfully processed {len(successfully_processed)}/{len(Config.MODELS)} models")
+    print(f"  Models: {', '.join(successfully_processed)}")
+    print(f"{'='*70}")
+    
+    # Step 4: Combine all results to single Excel
+    print(f"\n[Step 4/6] Combining all results to Excel...")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    excel_path = os.path.join(run_folder, f'all_models_results.xlsx')
+    
+    df = export_results_to_excel(all_model_results, excel_path)
+    
+    # Display summary
+    print("\n" + "="*70)
+    print("COMBINED RESULTS SUMMARY")
+    print("="*70)
+    print(df.to_string(index=False))
+    
+    # Step 5: Generate combined performance charts
+    print(f"\n[Step 5/6] Generating combined performance chart...")
     create_performance_charts(df, run_folder)
-
-    # ========================================================
-    # Save metadata
-    # ========================================================
-    print("\n[6/6] Saving metadata...")
-    info = {
-        "run_number": run_number,
-        "models": success_models,
-        "num_classes": num_classes,
-        "config": {
-            "epochs": Config.NUM_EPOCHS,
-            "batch_size": Config.BATCH_SIZE,
-            "lr": Config.LEARNING_RATE,
-            "warmup_epochs": Config.WARMUP_EPOCHS,
-            "eta_min": Config.ETA_MIN
+    
+    # Step 6: Save experiment info
+    print(f"\n[Step 6/6] Saving experiment metadata...")
+    experiment_info = {
+        'run_number': run_number,
+        'timestamp': timestamp,
+        'dataset_path': Config.DATASET_PATH,
+        'num_classes': num_classes,
+        'class_names': class_names,
+        'train_samples': len(train_paths),
+        'val_samples': len(val_paths),
+        'test_samples': len(test_paths),
+        'models_trained': successfully_processed,
+        'config': {
+            'batch_size': Config.BATCH_SIZE,
+            'num_epochs': Config.NUM_EPOCHS,
+            'learning_rate': Config.LEARNING_RATE,
+            'early_stopping_patience': Config.EARLY_STOPPING_PATIENCE,
+            'classifier_config': Config.CLASSIFIER_CONFIG,
+            'dropout_rate': Config.DROPOUT_RATE
         }
     }
-
-    with open(os.path.join(run_folder, "experiment_info.json"), "w") as f:
-        json.dump(info, f, indent=4)
-
-    # ========================================================
-    # Mark experiment as completed and generate summary
-    # ========================================================
-    tracker.mark_experiment_completed(experiment_number)
-    summary_df = tracker.generate_summary_table()
     
-    # Print experiment summary
-    print(f"\n📊 Experiment #{experiment_number} Summary:")
-    tracker.print_experiment_info(experiment_number)
+    info_path = os.path.join(run_folder, f'experiment_info.json')
+    with open(info_path, 'w') as f:
+        json.dump(experiment_info, f, indent=4)
+    
+    print(f"\n✓ Experiment info saved to: {info_path}")
+    
+    # Final summary
+    print("\n" + "="*70)
+    print(" BASELINE RESEARCH COMPLETED SUCCESSFULLY!")
+    print("="*70)
+    print(f"\n📊 Lần chạy #{run_number}:")
+    print(f"  - Folder: {run_folder}")
+    print(f"  - Combined Excel: {excel_path}")
+    print(f"  - Combined Chart: {os.path.join(run_folder, 'performance_comparison.png')}")
+    print(f"  - Experiment Info: {info_path}")
+    print(f"  - Individual Results: {run_folder}/<model_name>/")
+    print(f"\n💾 Disk Space Optimization:")
+    print(f"  - All checkpoints deleted after evaluation")
+    print(f"  - Only results (Excel + Charts) kept")
+    print(f"  - Estimated space saved: ~160GB (checkpoints)")
+    
+    # Find best model (based on Strategy 1 F1-Score)
+    strategy_1_df = df[df['Strategy'] == 'Strategy 1']
+    best_idx = strategy_1_df['F1-Score (%)'].idxmax()
+    best_model = strategy_1_df.loc[best_idx, 'Model']
+    best_f1 = strategy_1_df.loc[best_idx, 'F1-Score (%)']
+    best_acc = strategy_1_df.loc[best_idx, 'Accuracy (%)']
+    
+    print(f"\n🏆 Best Model (Strategy 1):")
+    print(f"  Model: {best_model}")
+    print(f"  Accuracy: {best_acc:.2f}%")
+    print(f"  F1-Score: {best_f1:.2f}%")
+    
+    print("\n" + "="*70 + "\n")
 
-    print("\n✅ PIPELINE COMPLETED SUCCESSFULLY")
-    print("=" * 70)
 
-
-# ============================================================
-# Entry
-# ============================================================
 if __name__ == "__main__":
-    args = parse_args()
-
-    # Dataset
-    Config.TRAIN_RATIO = args.train_ratio
-    Config.VAL_RATIO = args.val_ratio
-    Config.TEST_RATIO = args.test_ratio
-
-    # Training
-    Config.BATCH_SIZE = args.batch_size
-    Config.NUM_EPOCHS = args.epochs
-    Config.LEARNING_RATE = args.lr
-    Config.WEIGHT_DECAY = args.weight_decay
-    Config.NUM_WORKERS = args.num_workers
-    Config.RANDOM_SEED = args.seed
-
-    # Optimization
-    Config.EARLY_STOPPING_PATIENCE = args.early_stop
-    Config.LR_DECAY_PATIENCE = args.lr_decay_patience
-    Config.LR_DECAY_FACTOR = args.lr_decay_factor
-
-    # Scheduler
-    Config.WARMUP_EPOCHS = int(Config.NUM_EPOCHS * args.warmup_ratio)
-    Config.ETA_MIN = args.eta_min
-
-    # Model
-    Config.MODELS = args.models
-    Config.DROPOUT_RATE = args.dropout
-
-    # WandB
-    Config.USE_WANDB = args.wandb
-    Config.EXPERIMENT_NAME = args.exp_name
-
     main()
