@@ -440,12 +440,17 @@ def export_results_to_excel(all_model_results, output_path):
             }
             rows.append(row)
     
+    if not rows:
+        print("Warning: No results to export (all_results is empty).")
+        return pd.DataFrame()
+
     df = pd.DataFrame(rows)
     
-    # Reorder columns
+    # Reorder columns (only include those present to avoid KeyError)
     column_order = ['Model', 'Strategy', 'Test Loss', 'Accuracy (%)', 'Precision (%)', 
                    'Recall (%)', 'F1-Score (%)', 'AUC (%)']
-    df = df[column_order]
+    available_columns = [col for col in column_order if col in df.columns]
+    df = df[available_columns]
     
     # Save to Excel
     csv_path = output_path.replace('.xlsx', '.csv')
