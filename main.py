@@ -243,6 +243,8 @@ def main():
             
             # 3.2: Evaluate with 3 strategies
             print(f"\n  [3.2] Evaluating {model_name} with 3 strategies...")
+            # Tạo folder lưu checkpoint cho các strategy
+            strategy_checkpoint_dir = os.path.join(run_folder, model_name, 'checkpoints')
             results = evaluate_all_strategies(
                 model_name,
                 checkpoint_manager,
@@ -250,7 +252,8 @@ def main():
                 train_loader,  # CRITICAL: Pass train_loader for BatchNorm update
                 num_classes,
                 device,
-                class_names=class_names
+                class_names=class_names,
+                save_dir=strategy_checkpoint_dir
             )
             all_model_results[model_name] = results
             print(f"  ✓ Evaluation completed for {model_name}")

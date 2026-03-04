@@ -296,7 +296,7 @@ def _print_eval_results(metrics, per_class, prefix="    ", header="TEST RESULTS"
     print(f"{prefix}{'='*60}")
 
 
-def strategy_1_best_checkpoint(model_name, checkpoint_manager, test_loader, num_classes, device, class_names=None):
+def strategy_1_best_checkpoint(model_name, checkpoint_manager, test_loader, num_classes, device, class_names=None, save_dir=None):
     """
     Strategy 1: Evaluate best checkpoint based on lowest val_loss
 
@@ -319,13 +319,25 @@ def strategy_1_best_checkpoint(model_name, checkpoint_manager, test_loader, num_
     # Evaluate
     result = evaluate_model(model, test_loader, device, num_classes, class_names)
 
+    # Save strategy checkpoint to results folder
+    if save_dir:
+        os.makedirs(save_dir, exist_ok=True)
+        save_path = os.path.join(save_dir, 'Strategy_1_best.pth')
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            'strategy': 'Strategy 1',
+            'epoch': epoch,
+            'val_loss': val_loss
+        }, save_path)
+        print(f"    ✓ Strategy checkpoint saved: {save_path}")
+
     # Hiển thị chi tiết kết quả
     _print_eval_results(result['metrics'], result['per_class'], prefix="    ", header="TEST RESULTS - Strategy 1")
 
     return result
 
 
-def strategy_2_top_k_average(model_name, checkpoint_manager, test_loader, train_loader, num_classes, device, class_names=None):
+def strategy_2_top_k_average(model_name, checkpoint_manager, test_loader, train_loader, num_classes, device, class_names=None, save_dir=None):
     """
     Strategy 2: Average top-K checkpoints and evaluate
     CRITICAL: Update BatchNorm stats after loading averaged weights
@@ -365,13 +377,25 @@ def strategy_2_top_k_average(model_name, checkpoint_manager, test_loader, train_
         result = evaluate_model(model, test_loader, device, num_classes, class_names)
         results[k] = result
 
+        # Save strategy checkpoint to results folder
+        if save_dir:
+            os.makedirs(save_dir, exist_ok=True)
+            save_path = os.path.join(save_dir, f'Strategy_2_K{k}.pth')
+            torch.save({
+                'model_state_dict': model.state_dict(),
+                'strategy': f'Strategy 2 (K={k})',
+                'k': k,
+                'checkpoint_epochs': [ep for ep, _, _ in top_k]
+            }, save_path)
+            print(f"      ✓ Strategy checkpoint saved: {save_path}")
+
         # Hiển thị chi tiết kết quả
         _print_eval_results(result['metrics'], result['per_class'], prefix="      ", header=f"TEST RESULTS - Strategy 2 (K={k})")
 
     return results
 
 
-def strategy_3_last_n_average(model_name, checkpoint_manager, test_loader, train_loader, num_classes, device, class_names=None):
+def strategy_3_last_n_average(model_name, checkpoint_manager, test_loader, train_loader, num_classes, device, class_names=None, save_dir=None):
     """
     Strategy 3: Average last N epoch checkpoints
     CRITICAL: This is the most important strategy - must update BatchNorm stats!
@@ -407,13 +431,24 @@ def strategy_3_last_n_average(model_name, checkpoint_manager, test_loader, train
     # Evaluate
     result = evaluate_model(model, test_loader, device, num_classes, class_names)
 
+    # Save strategy checkpoint to results folder
+    if save_dir:
+        os.makedirs(save_dir, exist_ok=True)
+        save_path = os.path.join(save_dir, f'Strategy_3_last_{Config.LAST_N_EPOCHS}.pth')
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            'strategy': 'Strategy 3',
+            'epochs_averaged': epochs
+        }, save_path)
+        print(f"    ✓ Strategy checkpoint saved: {save_path}")
+
     # Hiển thị chi tiết kết quả
     _print_eval_results(result['metrics'], result['per_class'], prefix="    ", header="TEST RESULTS - Strategy 3")
 
     return result
 
 
-def evaluate_all_strategies(model_name, checkpoint_manager, test_loader, train_loader, num_classes, device, class_names=None):
+def evaluate_all_strategies(model_name, checkpoint_manager, test_loader, train_loader, num_classes, device, class_names=None, save_dir=None):
     """
     Evaluate all 3 strategies for a model
 
@@ -425,6 +460,7 @@ def evaluate_all_strategies(model_name, checkpoint_manager, test_loader, train_l
         num_classes: Number of classes
         device: Device
         class_names: List of class names
+        save_dir: Directory to save strategy checkpoints (None = don't save)
 
     Returns:
         all_results: Dictionary with strategy name as key and result dict as value.
@@ -439,19 +475,19 @@ def evaluate_all_strategies(model_name, checkpoint_manager, test_loader, train_l
 
     # Strategy 1: Best single checkpoint (no averaging, no BN update needed)
     all_results['Strategy 1'] = strategy_1_best_checkpoint(
-        model_name, checkpoint_manager, test_loader, num_classes, device, class_names
+        model_name, checkpoint_manager, test_loader, num_classes, device, class_names, save_dir=save_dir
     )
 
     # Strategy 2: Top-K averaging (with BN update)
     strategy_2_results = strategy_2_top_k_average(
-        model_name, checkpoint_manager, test_loader, train_loader, num_classes, device, class_names
+        model_name, checkpoint_manager, test_loader, train_loader, num_classes, device, class_names, save_dir=save_dir
     )
     for k, result in strategy_2_results.items():
         all_results[f'Strategy 2 (K={k})'] = result
 
     # Strategy 3: Last N epochs averaging (with BN update - MOST CRITICAL)
     all_results['Strategy 3'] = strategy_3_last_n_average(
-        model_name, checkpoint_manager, test_loader, train_loader, num_classes, device, class_names
+        model_name, checkpoint_manager, test_loader, train_loader, num_classes, device, class_names, save_dir=save_dir
     )
 
     return all_results
