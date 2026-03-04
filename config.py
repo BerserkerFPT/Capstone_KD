@@ -85,8 +85,8 @@ class Config:
     KEEP_RESULTS = True             # Luôn giữ results (Excel, charts)
     
     # Random seed for reproducibility
-    RANDOM_SEED = 123
-    
+    RANDOM_SEED = 1
+        
     # ===================== W&B Configuration =====================
     # W&B tracking
     USE_WANDB = False  # Set to False to disable wandb

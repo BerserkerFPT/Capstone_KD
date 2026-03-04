@@ -79,10 +79,10 @@ def get_model(model_name, num_classes, freeze_backbone=True):
         # Freeze backbone
         if freeze_backbone:
             for param in model.features.parameters():
-                param.requires_grad = True
+                param.requires_grad = False
         # Replace classifier (CNN - use BatchNorm)
         model.classifier = CustomClassifier(in_features, num_classes)
-    
+
     elif model_name == 'resnet18':
         model = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
         in_features = model.fc.in_features
@@ -90,10 +90,10 @@ def get_model(model_name, num_classes, freeze_backbone=True):
         if freeze_backbone:
             for name, param in model.named_parameters():
                 if not name.startswith('fc'):
-                    param.requires_grad = True
+                    param.requires_grad = False
         # Replace classifier
         model.fc = CustomClassifier(in_features, num_classes)
-    
+
     elif model_name == 'resnet101':
         model = models.resnet101(weights=models.ResNet101_Weights.IMAGENET1K_V1)
         in_features = model.fc.in_features
@@ -101,20 +101,20 @@ def get_model(model_name, num_classes, freeze_backbone=True):
         if freeze_backbone:
             for name, param in model.named_parameters():
                 if not name.startswith('fc'):
-                    param.requires_grad = True
+                    param.requires_grad = False
         # Replace classifier
         model.fc = CustomClassifier(in_features, num_classes)
-    
+
     elif model_name == 'mobilenet_v2':
         model = models.mobilenet_v2(weights=models.MobileNet_V2_Weights.IMAGENET1K_V1)
         in_features = model.classifier[1].in_features
         # Freeze backbone
         if freeze_backbone:
             for param in model.features.parameters():
-                param.requires_grad = True
+                param.requires_grad = False
         # Replace classifier
         model.classifier = CustomClassifier(in_features, num_classes)
-    
+
     elif model_name == 'densenet121':
         model = models.densenet121(weights=models.DenseNet121_Weights.IMAGENET1K_V1)
         in_features = model.classifier.in_features
@@ -122,10 +122,10 @@ def get_model(model_name, num_classes, freeze_backbone=True):
         if freeze_backbone:
             for name, param in model.named_parameters():
                 if not name.startswith('classifier'):
-                    param.requires_grad = True
+                    param.requires_grad = False
         # Replace classifier
         model.classifier = CustomClassifier(in_features, num_classes)
-    
+
     elif model_name == 'efficientnet_b0':
         model = timm.create_model('efficientnet_b0', pretrained=True)
         in_features = model.classifier.in_features
@@ -133,10 +133,10 @@ def get_model(model_name, num_classes, freeze_backbone=True):
         if freeze_backbone:
             for name, param in model.named_parameters():
                 if not name.startswith('classifier'):
-                    param.requires_grad = True
+                    param.requires_grad = False
         # Replace classifier
         model.classifier = CustomClassifier(in_features, num_classes)
-    
+
     elif model_name == 'convnext_tiny':
         model = timm.create_model('convnext_tiny', pretrained=True)
         in_features = model.head.fc.in_features
@@ -144,10 +144,10 @@ def get_model(model_name, num_classes, freeze_backbone=True):
         if freeze_backbone:
             for name, param in model.named_parameters():
                 if not name.startswith('head'):
-                    param.requires_grad = True
+                    param.requires_grad = False
         # Replace classifier (no BatchNorm)
         model.head.fc = CustomClassifier(in_features, num_classes)
-    
+
     elif model_name == 'vit_base_patch16_224':
         model = timm.create_model('vit_base_patch16_224', pretrained=True)
         in_features = model.head.in_features
@@ -155,10 +155,10 @@ def get_model(model_name, num_classes, freeze_backbone=True):
         if freeze_backbone:
             for name, param in model.named_parameters():
                 if not name.startswith('head'):
-                    param.requires_grad = True
+                    param.requires_grad = False
         # Replace classifier (Transformer - NO BatchNorm, use GELU)
         model.head = TransformerClassifier(in_features, num_classes)
-    
+
     elif model_name == 'swin_tiny_patch4_window7_224':
         model = timm.create_model('swin_tiny_patch4_window7_224', pretrained=True)
         # Swin has ClassifierHead with nested fc, not direct Linear
@@ -167,10 +167,10 @@ def get_model(model_name, num_classes, freeze_backbone=True):
         if freeze_backbone:
             for name, param in model.named_parameters():
                 if not name.startswith('head'):
-                    param.requires_grad = True
+                    param.requires_grad = False
         # Replace only fc inside head to keep global_pool
         model.head.fc = TransformerClassifier(in_features, num_classes)
-    
+
     elif model_name == 'convit_tiny':
         model = timm.create_model('convit_tiny', pretrained=True)
         in_features = model.head.in_features
@@ -178,7 +178,7 @@ def get_model(model_name, num_classes, freeze_backbone=True):
         if freeze_backbone:
             for name, param in model.named_parameters():
                 if not name.startswith('head'):
-                    param.requires_grad = True
+                    param.requires_grad = False
         # Replace classifier (Transformer - NO BatchNorm, use GELU)
         model.head = TransformerClassifier(in_features, num_classes)
     

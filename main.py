@@ -16,7 +16,7 @@ from datetime import datetime
 from config import Config
 from dataset import load_dataset, create_dataloaders
 from train import train_model, CheckpointManager
-from evaluate import evaluate_all_strategies, export_results_to_excel, create_performance_charts
+from evaluate import evaluate_all_strategies, export_results_to_excel, create_performance_charts, save_confusion_matrices
 from visualization import print_dataset_statistics
 
 
@@ -68,11 +68,11 @@ def save_model_results(model_name, results, output_dir):
     
     # Create dataframe for this model
     rows = []
-    for strategy_name, metrics in results.items():
+    for strategy_name, result in results.items():
         row = {
             'Model': model_name,
             'Strategy': strategy_name,
-            **metrics
+            **result['metrics']
         }
         rows.append(row)
     
@@ -230,7 +230,8 @@ def main():
                 test_loader,
                 train_loader,  # CRITICAL: Pass train_loader for BatchNorm update
                 num_classes,
-                device
+                device,
+                class_names=class_names
             )
             all_model_results[model_name] = results
             print(f"  ✓ Evaluation completed for {model_name}")
@@ -238,6 +239,12 @@ def main():
             # 3.3: Save individual model results
             print(f"\n  [3.3] Saving results for {model_name}...")
             save_model_results(model_name, results, run_folder)
+
+            # 3.3.1: Save confusion matrices for this model
+            model_dir = os.path.join(run_folder, model_name)
+            save_confusion_matrices(
+                {model_name: results}, model_dir, class_names=class_names
+            )
             
             # 3.4: Delete checkpoints to free disk space
             print(f"\n  [3.4] Cleaning up checkpoints for {model_name}...")
