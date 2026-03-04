@@ -265,9 +265,12 @@ def main():
                 {model_name: results}, model_dir, class_names=class_names
             )
             
-            # 3.4: Delete checkpoints to free disk space
-            print(f"\n  [3.4] Cleaning up checkpoints for {model_name}...")
-            delete_model_checkpoints(model_name, Config.CHECKPOINTS_DIR)
+            # 3.4: Delete checkpoints to free disk space (conditional)
+            if Config.AUTO_DELETE_CHECKPOINTS:
+                print(f"\n  [3.4] Cleaning up checkpoints for {model_name}...")
+                delete_model_checkpoints(model_name, Config.CHECKPOINTS_DIR)
+            else:
+                print(f"\n  [3.4] Keeping checkpoints for {model_name} (AUTO_DELETE_CHECKPOINTS=False)")
             
             successfully_processed.append(model_name)
             print(f"\n  ✅ {model_name} completed successfully!")

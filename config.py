@@ -14,19 +14,19 @@ class Config:
         DATASET_PATH = "/home/student/vuthde181070/dataset/TomatoDataset"
     else:
         # Local environment
-        DATASET_PATH = r"/home/student/kaggle/working/ProcessedOriginal"
+        DATASET_PATH = r"/home/student/TomatoDataset"
     # Train/Val/Test split ratios
     TRAIN_RATIO = 0.7
     VAL_RATIO = 0.15
     TEST_RATIO = 0.15
         
     # ===================== Training Configuration =====================
-    BATCH_SIZE = 64
-    NUM_EPOCHS = 200
-    LEARNING_RATE = 1e-5
-    WEIGHT_DECAY = 1e-7  # L2 regularization để chống overfitting
+    BATCH_SIZE = 32
+    NUM_EPOCHS = 150
+    LEARNING_RATE = 1.5e-4
+    WEIGHT_DECAY = 1e-4  # L2 regularization để chống overfitting
     WARMUP_EPOCHS = int(NUM_EPOCHS * 0.06)
-    ETA_MIN = 1e-6 #For CosineAnnealing LR
+    ETA_MIN = 1e-5 #For CosineAnnealing LR
   # Convert to integer for scheduler
     # Kaggle có 2 CPU cores, nên dùng NUM_WORKERS = 2
     # Set to 0 to avoid multiprocessing issues with limited memory
@@ -44,8 +44,8 @@ class Config:
         # 'vgg16',  
         # 'resnet18',
         # 'resnet101',
-        # 'mobilenet_v2',
-        'densenet121'
+        'mobilenet_v2'
+        # 'densenet121'
         # 'efficientnet_b0',
         # 'vit_base_patch16_224'
     ]
@@ -54,8 +54,8 @@ class Config:
     # Định nghĩa các lớp fully connected tùy chỉnh
     # Format: [hidden_dim1, hidden_dim2, ..., num_classes]
     # Đơn giản hóa cho dataset nhỏ (~10k ảnh) để tránh overfitting
-    CLASSIFIER_CONFIG = [256, 128]  # Giảm từ 3 xuống 2 hidden layers
-    DROPOUT_RATE = 0.5  # Tăng dropdown để chống overfitting mạnh hơn
+    CLASSIFIER_CONFIG = [512]  # Giảm từ 3 xuống 2 hidden layers
+    DROPOUT_RATE = 0.4  # Tăng dropdown để chống overfitting mạnh hơn
     
     # ===================== Image Configuration =====================
     IMAGE_SIZE = 224
@@ -81,11 +81,11 @@ class Config:
         RESULTS_DIR = "results"
     
     # Checkpoint management - TỰ ĐỘNG XÓA SAU KHI EVALUATE
-    AUTO_DELETE_CHECKPOINTS = True  # Xóa checkpoints sau khi evaluate xong mỗi model
+    AUTO_DELETE_CHECKPOINTS = False  # Set True để xóa checkpoints sau khi evaluate, False để giữ lại
     KEEP_RESULTS = True             # Luôn giữ results (Excel, charts)
     
     # Random seed for reproducibility
-    RANDOM_SEED = 1
+    RANDOM_SEED = 42
         
     # ===================== W&B Configuration =====================
     # W&B tracking

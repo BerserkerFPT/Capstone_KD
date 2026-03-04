@@ -1,0 +1,34 @@
+{
+    "run_number": 3,
+    "timestamp": "20260304_150641",
+    "dataset_path": "/home/student/TomatoDataset",
+    "num_classes": 10,
+    "class_names": [
+        "Tomato___Bacterial_spot",
+        "Tomato___Early_blight",
+        "Tomato___Late_blight",
+        "Tomato___Leaf_Mold",
+        "Tomato___Septoria_leaf_spot",
+        "Tomato___Spider_mites Two-spotted_spider_mite",
+        "Tomato___Target_Spot",
+        "Tomato___Tomato_Yellow_Leaf_Curl_Virus",
+        "Tomato___Tomato_mosaic_virus",
+        "Tomato___healthy"
+    ],
+    "train_samples": 1122,
+    "val_samples": 237,
+    "test_samples": 250,
+    "models_trained": [
+        "mobilenet_v2"
+    ],
+    "config": {
+        "batch_size": 32,
+        "num_epochs": 150,
+        "learning_rate": 0.00015,
+        "early_stopping_patience": 15,
+        "classifier_config": [
+            512
+        ],
+        "dropout_rate": 0.4
+    }
+}
