@@ -56,8 +56,8 @@ def get_next_run_folder(base_results_dir):
 
 def save_model_results(model_name, results, output_dir):
     """
-    Save individual model results to Excel and create chart
-    
+    Save individual model results to Excel (2 sheets: macro + per-class)
+
     Args:
         model_name: Name of the model
         results: Dictionary with strategy results
@@ -65,30 +65,49 @@ def save_model_results(model_name, results, output_dir):
     """
     model_dir = os.path.join(output_dir, model_name)
     os.makedirs(model_dir, exist_ok=True)
-    
-    # Create dataframe for this model
-    rows = []
+
+    # Sheet 1: Macro-averaged metrics
+    macro_rows = []
     for strategy_name, result in results.items():
         row = {
             'Model': model_name,
             'Strategy': strategy_name,
             **result['metrics']
         }
-        rows.append(row)
-    
-    df = pd.DataFrame(rows)
-    
+        macro_rows.append(row)
+
+    df_macro = pd.DataFrame(macro_rows)
+
     # Reorder columns (including Test Loss)
-    column_order = ['Model', 'Strategy', 'Test Loss', 'Accuracy (%)', 'Precision (%)', 
+    column_order = ['Model', 'Strategy', 'Test Loss', 'Accuracy (%)', 'Precision (%)',
                    'Recall (%)', 'F1-Score (%)', 'AUC (%)']
-    df = df[column_order]
-    
-    # Save to Excel
+    df_macro = df_macro[column_order]
+
+    # Sheet 2: Per-class metrics
+    per_class_rows = []
+    for strategy_name, result in results.items():
+        for cls_name, cls_metrics in result['per_class'].items():
+            pc_row = {
+                'Model': model_name,
+                'Strategy': strategy_name,
+                'Class': cls_name,
+                **cls_metrics
+            }
+            per_class_rows.append(pc_row)
+
+    df_per_class = pd.DataFrame(per_class_rows)
+    pc_column_order = ['Model', 'Strategy', 'Class', 'Precision (%)', 'Recall (%)',
+                       'F1-Score (%)', 'Specificity (%)', 'AUC (%)', 'Support']
+    df_per_class = df_per_class[pc_column_order]
+
+    # Save both sheets to Excel
     excel_path = os.path.join(model_dir, f'{model_name}_results.xlsx')
-    df.to_excel(excel_path, index=False)
+    with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
+        df_macro.to_excel(writer, sheet_name='Macro Results', index=False)
+        df_per_class.to_excel(writer, sheet_name='Per-Class Results', index=False)
     print(f"  ✓ Results saved to: {excel_path}")
-    
-    return df
+
+    return df_macro
 
 
 def delete_model_checkpoints(model_name, checkpoints_dir):

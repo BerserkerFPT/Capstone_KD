@@ -33,10 +33,10 @@ class Config:
     NUM_WORKERS = 16
     
     # Early Stopping
-    EARLY_STOPPING_PATIENCE = 15  # Stop if val_loss doesn't improve for 20 epochs
+    EARLY_STOPPING_PATIENCE = 15  # Stop if val_loss doesn't improve for 15 epochs
     
     # Learning Rate Decay
-    LR_DECAY_PATIENCE = 5  # Reduce LR if val_loss doesn't improve for 10 epochs
+    LR_DECAY_PATIENCE = 5  # Reduce LR if val_loss doesn't improve for 5 epochs
     LR_DECAY_FACTOR = 0.5  # Multiply LR by this factor when decaying
     
     # ===================== Model Configuration =====================

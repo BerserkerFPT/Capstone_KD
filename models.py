@@ -79,7 +79,7 @@ def get_model(model_name, num_classes, freeze_backbone=True):
         # Freeze backbone
         if freeze_backbone:
             for param in model.features.parameters():
-                param.requires_grad = False
+                param.requires_grad = True
         # Replace classifier (CNN - use BatchNorm)
         model.classifier = CustomClassifier(in_features, num_classes)
 
@@ -90,7 +90,7 @@ def get_model(model_name, num_classes, freeze_backbone=True):
         if freeze_backbone:
             for name, param in model.named_parameters():
                 if not name.startswith('fc'):
-                    param.requires_grad = False
+                    param.requires_grad = True
         # Replace classifier
         model.fc = CustomClassifier(in_features, num_classes)
 
@@ -101,7 +101,7 @@ def get_model(model_name, num_classes, freeze_backbone=True):
         if freeze_backbone:
             for name, param in model.named_parameters():
                 if not name.startswith('fc'):
-                    param.requires_grad = False
+                    param.requires_grad = True
         # Replace classifier
         model.fc = CustomClassifier(in_features, num_classes)
 
@@ -111,7 +111,7 @@ def get_model(model_name, num_classes, freeze_backbone=True):
         # Freeze backbone
         if freeze_backbone:
             for param in model.features.parameters():
-                param.requires_grad = False
+                param.requires_grad = True
         # Replace classifier
         model.classifier = CustomClassifier(in_features, num_classes)
 
@@ -122,7 +122,7 @@ def get_model(model_name, num_classes, freeze_backbone=True):
         if freeze_backbone:
             for name, param in model.named_parameters():
                 if not name.startswith('classifier'):
-                    param.requires_grad = False
+                    param.requires_grad = True
         # Replace classifier
         model.classifier = CustomClassifier(in_features, num_classes)
 
@@ -133,7 +133,7 @@ def get_model(model_name, num_classes, freeze_backbone=True):
         if freeze_backbone:
             for name, param in model.named_parameters():
                 if not name.startswith('classifier'):
-                    param.requires_grad = False
+                    param.requires_grad = True
         # Replace classifier
         model.classifier = CustomClassifier(in_features, num_classes)
 
@@ -144,7 +144,7 @@ def get_model(model_name, num_classes, freeze_backbone=True):
         if freeze_backbone:
             for name, param in model.named_parameters():
                 if not name.startswith('head'):
-                    param.requires_grad = False
+                    param.requires_grad = True
         # Replace classifier (no BatchNorm)
         model.head.fc = CustomClassifier(in_features, num_classes)
 
@@ -155,7 +155,7 @@ def get_model(model_name, num_classes, freeze_backbone=True):
         if freeze_backbone:
             for name, param in model.named_parameters():
                 if not name.startswith('head'):
-                    param.requires_grad = False
+                    param.requires_grad = True
         # Replace classifier (Transformer - NO BatchNorm, use GELU)
         model.head = TransformerClassifier(in_features, num_classes)
 
@@ -167,7 +167,7 @@ def get_model(model_name, num_classes, freeze_backbone=True):
         if freeze_backbone:
             for name, param in model.named_parameters():
                 if not name.startswith('head'):
-                    param.requires_grad = False
+                    param.requires_grad = True
         # Replace only fc inside head to keep global_pool
         model.head.fc = TransformerClassifier(in_features, num_classes)
 
@@ -178,7 +178,7 @@ def get_model(model_name, num_classes, freeze_backbone=True):
         if freeze_backbone:
             for name, param in model.named_parameters():
                 if not name.startswith('head'):
-                    param.requires_grad = False
+                    param.requires_grad = True
         # Replace classifier (Transformer - NO BatchNorm, use GELU)
         model.head = TransformerClassifier(in_features, num_classes)
     

@@ -311,7 +311,7 @@ def strategy_1_best_checkpoint(model_name, checkpoint_manager, test_loader, num_
     print(f"    Best checkpoint: Epoch {epoch}, Val Loss: {val_loss:.4f}")
 
     # Load model
-    model = get_model(model_name, num_classes, freeze_backbone=True)
+    model = get_model(model_name, num_classes, freeze_backbone=False)
     checkpoint = torch.load(checkpoint_path, map_location=device)
     model.load_state_dict(checkpoint['model_state_dict'])
     model = model.to(device)
@@ -353,7 +353,7 @@ def strategy_2_top_k_average(model_name, checkpoint_manager, test_loader, train_
         averaged_weights = average_weights(checkpoint_paths, device)
 
         # Load model with averaged weights
-        model = get_model(model_name, num_classes, freeze_backbone=True)
+        model = get_model(model_name, num_classes, freeze_backbone=False)
         model.load_state_dict(averaged_weights, strict=True)  # Use strict=True since we handle all keys properly
         model = model.to(device)
 
@@ -396,7 +396,7 @@ def strategy_3_last_n_average(model_name, checkpoint_manager, test_loader, train
     averaged_weights = average_weights(checkpoint_paths, device)
 
     # Load model with averaged weights
-    model = get_model(model_name, num_classes, freeze_backbone=True)
+    model = get_model(model_name, num_classes, freeze_backbone=False)
     model.load_state_dict(averaged_weights, strict=True)  # Use strict=True since we handle all keys properly
     model = model.to(device)
     # CRITICAL: Update BatchNorm statistics with training data
