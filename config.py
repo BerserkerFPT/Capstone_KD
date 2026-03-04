@@ -14,20 +14,20 @@ class Config:
         DATASET_PATH = "/home/student/vuthde181070/dataset/TomatoDataset"
     else:
         # Local environment
-        DATASET_PATH = r"C:\Users\Administrator\Downloads\kaggle\working\ProcessedOriginal"
+        DATASET_PATH = r"/home/student/kaggle/working/ProcessedOriginal"
     # Train/Val/Test split ratios
     TRAIN_RATIO = 0.7
     VAL_RATIO = 0.15
     TEST_RATIO = 0.15
         
     # ===================== Training Configuration =====================
-    BATCH_SIZE = 32
+    BATCH_SIZE = 64
     NUM_EPOCHS = 200
-    LEARNING_RATE = 0.0005
-    WEIGHT_DECAY = 5e-4  # L2 regularization để chống overfitting
+    LEARNING_RATE = 1e-5
+    WEIGHT_DECAY = 1e-7  # L2 regularization để chống overfitting
     # Kaggle có 2 CPU cores, nên dùng NUM_WORKERS = 2
     # Set to 0 to avoid multiprocessing issues with limited memory
-    NUM_WORKERS = 2
+    NUM_WORKERS = 16
     
     # Early Stopping
     EARLY_STOPPING_PATIENCE = 15  # Stop if val_loss doesn't improve for 20 epochs
@@ -38,16 +38,16 @@ class Config:
     
     # ===================== Model Configuration =====================
     MODELS = [
-        'vgg16',  
-        'resnet18',
-        'resnet101',
-        'mobilenet_v2',
-        'densenet121',
-        'efficientnet_b0',
-        'convnext_tiny',
-        'vit_base_patch16_224',
-        'swin_tiny_patch4_window7_224',
-        'convit_tiny'
+        # 'vgg16',  
+        # 'resnet18',
+        # 'resnet101',
+        # 'mobilenet_v2',
+        'densenet121'
+        # 'efficientnet_b0',
+        # 'convnext_tiny',
+        # 'vit_base_patch16_224',
+        # 'swin_tiny_patch4_window7_224',
+        # 'convit_tiny'
     ]
     
     # Custom classifier configuration
@@ -85,7 +85,7 @@ class Config:
     KEEP_RESULTS = True             # Luôn giữ results (Excel, charts)
     
     # Random seed for reproducibility
-    RANDOM_SEED = 42
+    RANDOM_SEED = 123
     
     @classmethod
     def get_num_classes(cls):

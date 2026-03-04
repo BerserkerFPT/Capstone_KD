@@ -1,0 +1,30 @@
+{
+    "run_number": 1,
+    "timestamp": "20260304_125833",
+    "dataset_path": "/home/student/kaggle/working/ProcessedOriginal",
+    "num_classes": 5,
+    "class_names": [
+        "Anthracnose (Brown Spot)",
+        "Healthy",
+        "Insect Damage",
+        "Leaf Spot (Yellow)",
+        "Powdery Mildew"
+    ],
+    "train_samples": 2161,
+    "val_samples": 461,
+    "test_samples": 468,
+    "models_trained": [
+        "densenet121"
+    ],
+    "config": {
+        "batch_size": 64,
+        "num_epochs": 200,
+        "learning_rate": 1e-05,
+        "early_stopping_patience": 15,
+        "classifier_config": [
+            256,
+            128
+        ],
+        "dropout_rate": 0.5
+    }
+}

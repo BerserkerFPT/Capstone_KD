@@ -9,11 +9,22 @@ import torch.nn as nn
 import torch.optim as optim
 from tqdm import tqdm
 
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+    print("⚠ wandb not installed. Run: pip install wandb")
+
 from config import Config
 from models import get_model
 from dataset import load_dataset, create_dataloaders
 from visualization import print_dataset_statistics, plot_training_history, plot_patience_period
 
+from torch.optim.lr_scheduler import SequentialLR
+from torch.optim.lr_scheduler import LinearLR
+from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 class EarlyStopping:
     """Early stopping based on validation loss"""
@@ -227,7 +238,7 @@ def validate(model, val_loader, criterion, device):
     return epoch_loss, epoch_acc
 
 
-def train_model(model_name, train_loader, val_loader, num_classes, device, class_names=None):
+def train_model(model_name, train_loader, val_loader, num_classes, device, class_names=None, test_loader=None):
     """
     Train a single model
     
@@ -238,6 +249,7 @@ def train_model(model_name, train_loader, val_loader, num_classes, device, class
         num_classes: Number of classes
         device: Device to train on
         class_names: List of class names (optional, for visualization)
+        test_loader: Test dataloader (optional, for final test evaluation)
     
     Returns:
         checkpoint_manager: CheckpointManager object
@@ -247,6 +259,53 @@ def train_model(model_name, train_loader, val_loader, num_classes, device, class
     print(f"\n{'='*70}")
     print(f"Training {model_name}")
     print(f"{'='*70}")
+    
+    # ================= W&B INIT =================
+    use_wandb = Config.USE_WANDB and WANDB_AVAILABLE
+    if use_wandb:
+        # Login to wandb (chỉ cần login một lần)
+        try:
+            wandb.login(key=Config.WANDB_API_KEY)
+            print(f"✓ W&B logged in successfully")
+        except Exception as e:
+            print(f"⚠ W&B login failed: {e}")
+            use_wandb = False
+    
+    if use_wandb:
+        # Tạo run name: experiment_name + model_name
+        run_name = f"{Config.EXPERIMENT_NAME}_{model_name}"
+        
+        wandb.init(
+            project=Config.WANDB_PROJECT,
+            entity=Config.WANDB_ENTITY,
+            name=run_name,
+            config={
+                "experiment": Config.EXPERIMENT_NAME,  # Tên experiment
+                "model": model_name,
+                "epochs": Config.NUM_EPOCHS,
+                "batch_size": Config.BATCH_SIZE,
+                "learning_rate": Config.LEARNING_RATE,
+                "optimizer": "Adam",
+                "weight_decay": Config.WEIGHT_DECAY,
+                "scheduler": "ReduceLROnPlateau",
+                "early_stopping_patience": Config.EARLY_STOPPING_PATIENCE,
+                "lr_decay_patience": Config.LR_DECAY_PATIENCE,
+                "lr_decay_factor": Config.LR_DECAY_FACTOR,
+                "image_size": Config.IMAGE_SIZE,
+                "num_workers": Config.NUM_WORKERS,
+                "classifier_config": Config.CLASSIFIER_CONFIG,
+                "dropout_rate": Config.DROPOUT_RATE,
+                "num_classes": num_classes,
+                "random_seed": Config.RANDOM_SEED
+            },
+            reinit=True  # Allow multiple runs in same script
+        )
+        print(f"✓ W&B initialized: {run_name}")
+    else:
+        if not WANDB_AVAILABLE:
+            print("⚠ W&B not available. Install with: pip install wandb")
+        else:
+            print("⚠ W&B disabled in config (USE_WANDB=False)")
     
     # Create model
     model = get_model(model_name, num_classes, freeze_backbone=True)
@@ -258,15 +317,31 @@ def train_model(model_name, train_loader, val_loader, num_classes, device, class
                           lr=Config.LEARNING_RATE,
                           weight_decay=Config.WEIGHT_DECAY)  # L2 regularization
     
-    # Learning rate scheduler
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, 
-        mode='min', 
-        factor=Config.LR_DECAY_FACTOR, 
-        patience=Config.LR_DECAY_PATIENCE,
-        # verbose=True  # IMPORTANT: Show LR changes for monitoring
+    # # Learning rate scheduler
+    # scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+    #     optimizer, 
+    #     mode='min', 
+    #     factor=Config.LR_DECAY_FACTOR, 
+    #     patience=Config.LR_DECAY_PATIENCE,
+    #     # verbose=True  # IMPORTANT: Show LR changes for monitoring
+    # )
+        # Sequential LR: Linear Warmup + Cosine Annealing
+    scheduler1 = LinearLR(
+        optimizer,
+        start_factor=0.1,
+        end_factor=1.0,     
+        total_iters=Config.WARMUP_EPOCHS
     )
-    
+    scheduler2 = CosineAnnealingLR(
+        optimizer,
+        T_max=Config.NUM_EPOCHS - Config.WARMUP_EPOCHS,
+        eta_min=Config.ETA_MIN
+    )
+    scheduler = SequentialLR(
+        optimizer,
+        schedulers=[scheduler1, scheduler2],
+        milestones=[Config.WARMUP_EPOCHS]
+    )
     # Early stopping and checkpoint manager
     early_stopping = EarlyStopping(patience=Config.EARLY_STOPPING_PATIENCE)
     checkpoint_manager = CheckpointManager(
@@ -310,8 +385,23 @@ def train_model(model_name, train_loader, val_loader, num_classes, device, class
         print(f"  Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%")
         print(f"  Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%")
         
+        # ================= W&B LOGGING =================
+        if use_wandb:
+            wandb.log(
+                {
+                    "train/loss": train_loss,
+                    "train/acc": train_acc,
+                    "val/loss": val_loss,
+                    "val/acc": val_acc,
+                    "learning_rate": current_lr,
+                    "epoch": epoch,
+                    "epoch_time": epoch_time
+                },
+                step=epoch
+            )
+        
         # Learning rate scheduler step
-        scheduler.step(val_loss)
+        scheduler.step()
         
         # Save checkpoint
         is_best = val_loss < best_val_loss
@@ -333,6 +423,44 @@ def train_model(model_name, train_loader, val_loader, num_classes, device, class
     print(f"\n✓ Training completed for {model_name}")
     print(f"  Best Val Loss: {best_val_loss:.4f}")
     print(f"  Total checkpoints saved: {len(checkpoint_manager.checkpoints)}")
+    
+    # ================= FINAL TEST EVALUATION =================
+    test_loss = None
+    test_acc = None
+    
+    if test_loader is not None:
+        print(f"\n{'='*70}")
+        print(f"Final Test Evaluation on Best Checkpoint")
+        print(f"{'='*70}")
+        
+        # Load best checkpoint
+        best_epoch, best_val_loss_cp, best_checkpoint_path = checkpoint_manager.get_best_checkpoint()
+        checkpoint = torch.load(best_checkpoint_path, map_location=device)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        
+        # Evaluate on test set
+        test_loss, test_acc = validate(model, test_loader, criterion, device)
+        
+        print(f"  Best Checkpoint: Epoch {best_epoch}, Val Loss: {best_val_loss_cp:.4f}")
+        print(f"  Test Loss: {test_loss:.4f}, Test Acc: {test_acc:.2f}%")
+    
+    # ================= W&B SUMMARY & FINISH =================
+    if use_wandb:
+        # Log final summary
+        wandb.run.summary["best_val_loss"] = best_val_loss
+        wandb.run.summary["best_epoch"] = checkpoint_manager.best_epoch
+        wandb.run.summary["total_epochs"] = epoch
+        wandb.run.summary["total_checkpoints"] = len(checkpoint_manager.checkpoints)
+        
+        # Log test metrics if available
+        if test_loss is not None and test_acc is not None:
+            wandb.run.summary["test_loss"] = test_loss
+            wandb.run.summary["test_acc"] = test_acc
+            print(f"  ✓ Test metrics logged to W&B")
+        
+        # Finish wandb run
+        wandb.finish()
+        print(f"✓ W&B run finished")
     
     # Generate training plots
     viz_dir = os.path.join(Config.RESULTS_DIR, "visualizations")
@@ -395,5 +523,6 @@ if __name__ == "__main__":
         val_loader, 
         num_classes, 
         device,
-        class_names=class_names
+        class_names=class_names,
+        test_loader=test_loader
     )
