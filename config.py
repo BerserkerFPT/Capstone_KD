@@ -14,7 +14,7 @@ class Config:
         DATASET_PATH = "/home/student/vuthde181070/dataset/TomatoDataset"
     else:
         # Local environment
-        DATASET_PATH = r"C:\Users\Administrator\Downloads\kaggle\working\ProcessedOriginal"
+        DATASET_PATH = r"/home/student/kaggle/working/ProcessedOriginal"
     # Train/Val/Test split ratios
     TRAIN_RATIO = 0.7
     VAL_RATIO = 0.15
@@ -22,8 +22,8 @@ class Config:
         
     # ===================== Training Configuration =====================
     BATCH_SIZE = 64
-    NUM_EPOCHS = 100
-    LEARNING_RATE = 4e-4
+    NUM_EPOCHS = 200
+    LEARNING_RATE = 1e-5
     WEIGHT_DECAY = 1e-7  # L2 regularization để chống overfitting
     WARMUP_EPOCHS = int(NUM_EPOCHS * 0.06)
     ETA_MIN = 1e-6 #For CosineAnnealing LR
@@ -41,13 +41,13 @@ class Config:
     
     # ===================== Model Configuration =====================
     MODELS = [
-        'vgg16',  
-        'resnet18',
-        'resnet101',
-        'mobilenet_v2',
-        'densenet121',
-        'efficientnet_b0',
-        'vit_base_patch16_224'
+        # 'vgg16',  
+        # 'resnet18',
+        # 'resnet101',
+        # 'mobilenet_v2',
+        'densenet121'
+        # 'efficientnet_b0',
+        # 'vit_base_patch16_224'
     ]
     
     # Custom classifier configuration
@@ -85,7 +85,7 @@ class Config:
     KEEP_RESULTS = True             # Luôn giữ results (Excel, charts)
     
     # Random seed for reproducibility
-    RANDOM_SEED = 42
+    RANDOM_SEED = 123
     
     # ===================== W&B Configuration =====================
     # W&B tracking

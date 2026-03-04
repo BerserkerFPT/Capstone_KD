@@ -115,8 +115,12 @@ def get_model(model_name, num_classes, freeze_backbone=True):
         # Replace classifier
         model.classifier = CustomClassifier(in_features, num_classes)
     
+    elif model_name == 'densenet121':
+        model = models.densenet121(weights=models.DenseNet121_Weights.IMAGENET1K_V1)
+        in_features = model.classifier.in_features
         # Freeze backbone
-        for name, param in model.named_parameters():
+        if freeze_backbone:
+            for name, param in model.named_parameters():
                 if not name.startswith('classifier'):
                     param.requires_grad = True
         # Replace classifier
@@ -126,7 +130,10 @@ def get_model(model_name, num_classes, freeze_backbone=True):
         model = timm.create_model('efficientnet_b0', pretrained=True)
         in_features = model.classifier.in_features
         # Freeze backbone
-        param.requires_grad = True
+        if freeze_backbone:
+            for name, param in model.named_parameters():
+                if not name.startswith('classifier'):
+                    param.requires_grad = True
         # Replace classifier
         model.classifier = CustomClassifier(in_features, num_classes)
     
