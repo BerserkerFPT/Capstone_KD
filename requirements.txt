@@ -1,0 +1,21 @@
+# PyTorch and related
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Vision Transformer models
+timm>=0.9.0
+
+# Progress bars
+tqdm>=4.65.0
+
+# Image processing
+Pillow>=9.5.0
+
+# Numerical computing
+numpy>=1.24.0
+
+# Optional but recommended for reproducibility
+scikit-learn>=1.2.0
+matplotlib>=3.7.0
+pandas>=2.0.0
+openpyxl>=3.1.0
