@@ -308,7 +308,7 @@ def train_model(model_name, train_loader, val_loader, num_classes, device, class
             print("⚠ W&B disabled in config (USE_WANDB=False)")
     
     # Create model
-    model = get_model(model_name, num_classes, freeze_backbone=True)
+    model = get_model(model_name, num_classes, freeze_backbone=False)
     model = model.to(device)
     
     # Loss and optimizer
@@ -366,7 +366,7 @@ def train_model(model_name, train_loader, val_loader, num_classes, device, class
         epoch_start_time = time.time()
         
         # Train
-        train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, device, freeze_backbone=True)
+        train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, device, freeze_backbone=False)
         
         # Validate
         val_loss, val_acc = validate(model, val_loader, criterion, device)

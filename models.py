@@ -60,7 +60,7 @@ class TransformerClassifier(nn.Module):
         return self.classifier(x)
 
 
-def get_model(model_name, num_classes, freeze_backbone=True):
+def get_model(model_name, num_classes, freeze_backbone=False):
     """
     Get pretrained model with custom classifier
     
@@ -76,18 +76,24 @@ def get_model(model_name, num_classes, freeze_backbone=True):
     if model_name == 'vgg16':
         model = models.vgg16(weights=models.VGG16_Weights.IMAGENET1K_V1)
         in_features = model.classifier[0].in_features
-        # Freeze backbone
+        # Freeze or unfreeze backbone
         if freeze_backbone:
             for param in model.features.parameters():
+                param.requires_grad = False
+        else:
+            for param in model.features.parameters():
                 param.requires_grad = True
-        # Replace classifier (CNN - use BatchNorm)
         model.classifier = CustomClassifier(in_features, num_classes)
 
     elif model_name == 'resnet18':
         model = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
         in_features = model.fc.in_features
-        # Freeze backbone
+        # Freeze or unfreeze backbone
         if freeze_backbone:
+            for name, param in model.named_parameters():
+                if not name.startswith('fc'):
+                    param.requires_grad = False
+        else:
             for name, param in model.named_parameters():
                 if not name.startswith('fc'):
                     param.requires_grad = True
@@ -97,8 +103,12 @@ def get_model(model_name, num_classes, freeze_backbone=True):
     elif model_name == 'resnet101':
         model = models.resnet101(weights=models.ResNet101_Weights.IMAGENET1K_V1)
         in_features = model.fc.in_features
-        # Freeze backbone
+        # Freeze or unfreeze backbone
         if freeze_backbone:
+            for name, param in model.named_parameters():
+                if not name.startswith('fc'):
+                    param.requires_grad = False
+        else:
             for name, param in model.named_parameters():
                 if not name.startswith('fc'):
                     param.requires_grad = True
@@ -108,8 +118,11 @@ def get_model(model_name, num_classes, freeze_backbone=True):
     elif model_name == 'mobilenet_v2':
         model = models.mobilenet_v2(weights=models.MobileNet_V2_Weights.IMAGENET1K_V1)
         in_features = model.classifier[1].in_features
-        # Freeze backbone
+        # Freeze or unfreeze backbone
         if freeze_backbone:
+            for param in model.features.parameters():
+                param.requires_grad = False
+        else:
             for param in model.features.parameters():
                 param.requires_grad = True
         # Replace classifier
@@ -118,8 +131,12 @@ def get_model(model_name, num_classes, freeze_backbone=True):
     elif model_name == 'densenet121':
         model = models.densenet121(weights=models.DenseNet121_Weights.IMAGENET1K_V1)
         in_features = model.classifier.in_features
-        # Freeze backbone
+        # Freeze or unfreeze backbone
         if freeze_backbone:
+            for name, param in model.named_parameters():
+                if not name.startswith('classifier'):
+                    param.requires_grad = False
+        else:
             for name, param in model.named_parameters():
                 if not name.startswith('classifier'):
                     param.requires_grad = True
@@ -129,8 +146,12 @@ def get_model(model_name, num_classes, freeze_backbone=True):
     elif model_name == 'efficientnet_b0':
         model = timm.create_model('efficientnet_b0', pretrained=True)
         in_features = model.classifier.in_features
-        # Freeze backbone
+        # Freeze or unfreeze backbone
         if freeze_backbone:
+            for name, param in model.named_parameters():
+                if not name.startswith('classifier'):
+                    param.requires_grad = False
+        else:
             for name, param in model.named_parameters():
                 if not name.startswith('classifier'):
                     param.requires_grad = True
@@ -140,8 +161,12 @@ def get_model(model_name, num_classes, freeze_backbone=True):
     elif model_name == 'convnext_tiny':
         model = timm.create_model('convnext_tiny', pretrained=True)
         in_features = model.head.fc.in_features
-        # Freeze backbone
+        # Freeze or unfreeze backbone
         if freeze_backbone:
+            for name, param in model.named_parameters():
+                if not name.startswith('head'):
+                    param.requires_grad = False
+        else:
             for name, param in model.named_parameters():
                 if not name.startswith('head'):
                     param.requires_grad = True
@@ -151,8 +176,12 @@ def get_model(model_name, num_classes, freeze_backbone=True):
     elif model_name == 'vit_base_patch16_224':
         model = timm.create_model('vit_base_patch16_224', pretrained=True)
         in_features = model.head.in_features
-        # Freeze backbone
+        # Freeze or unfreeze backbone
         if freeze_backbone:
+            for name, param in model.named_parameters():
+                if not name.startswith('head'):
+                    param.requires_grad = False
+        else:
             for name, param in model.named_parameters():
                 if not name.startswith('head'):
                     param.requires_grad = True
@@ -163,8 +192,12 @@ def get_model(model_name, num_classes, freeze_backbone=True):
         model = timm.create_model('swin_tiny_patch4_window7_224', pretrained=True)
         # Swin has ClassifierHead with nested fc, not direct Linear
         in_features = model.head.fc.in_features
-        # Freeze backbone
+        # Freeze or unfreeze backbone
         if freeze_backbone:
+            for name, param in model.named_parameters():
+                if not name.startswith('head'):
+                    param.requires_grad = False
+        else:
             for name, param in model.named_parameters():
                 if not name.startswith('head'):
                     param.requires_grad = True
@@ -174,8 +207,12 @@ def get_model(model_name, num_classes, freeze_backbone=True):
     elif model_name == 'convit_tiny':
         model = timm.create_model('convit_tiny', pretrained=True)
         in_features = model.head.in_features
-        # Freeze backbone
+        # Freeze or unfreeze backbone
         if freeze_backbone:
+            for name, param in model.named_parameters():
+                if not name.startswith('head'):
+                    param.requires_grad = False
+        else:
             for name, param in model.named_parameters():
                 if not name.startswith('head'):
                     param.requires_grad = True
