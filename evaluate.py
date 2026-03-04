@@ -203,13 +203,11 @@ def evaluate_model(model, test_loader, device, num_classes, class_names=None):
     precision = precision_score(all_labels, all_preds, average='macro', zero_division=0) * 100
     recall = recall_score(all_labels, all_preds, average='macro', zero_division=0) * 100
     f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0) * 100
-
     # AUC (one-vs-rest)
     try:
         auc = roc_auc_score(all_labels, all_probs, multi_class='ovr', average='macro') * 100
     except:
         auc = 0.0
-
     metrics = {
         'Test Loss': test_loss,
         'Accuracy (%)': accuracy,
@@ -401,7 +399,6 @@ def strategy_3_last_n_average(model_name, checkpoint_manager, test_loader, train
     model = get_model(model_name, num_classes, freeze_backbone=True)
     model.load_state_dict(averaged_weights, strict=True)  # Use strict=True since we handle all keys properly
     model = model.to(device)
-
     # CRITICAL: Update BatchNorm statistics with training data
     # This is ESSENTIAL because frozen backbone may have different BN stats across epochs
     print(f"    Updating BatchNorm statistics (this ensures model correctness)...")

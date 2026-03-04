@@ -14,7 +14,7 @@ class Config:
         DATASET_PATH = "/home/student/vuthde181070/dataset/TomatoDataset"
     else:
         # Local environment
-        DATASET_PATH = r"/home/student/kaggle/working/ProcessedOriginal"
+        DATASET_PATH = r"C:\Users\Administrator\Downloads\kaggle\working\ProcessedOriginal"
     # Train/Val/Test split ratios
     TRAIN_RATIO = 0.7
     VAL_RATIO = 0.15
@@ -22,9 +22,12 @@ class Config:
         
     # ===================== Training Configuration =====================
     BATCH_SIZE = 64
-    NUM_EPOCHS = 200
-    LEARNING_RATE = 1e-5
+    NUM_EPOCHS = 100
+    LEARNING_RATE = 4e-4
     WEIGHT_DECAY = 1e-7  # L2 regularization để chống overfitting
+    WARMUP_EPOCHS = int(NUM_EPOCHS * 0.06)
+    ETA_MIN = 1e-6 #For CosineAnnealing LR
+  # Convert to integer for scheduler
     # Kaggle có 2 CPU cores, nên dùng NUM_WORKERS = 2
     # Set to 0 to avoid multiprocessing issues with limited memory
     NUM_WORKERS = 16
@@ -38,16 +41,13 @@ class Config:
     
     # ===================== Model Configuration =====================
     MODELS = [
-        # 'vgg16',  
-        # 'resnet18',
-        # 'resnet101',
-        # 'mobilenet_v2',
-        'densenet121'
-        # 'efficientnet_b0',
-        # 'convnext_tiny',
-        # 'vit_base_patch16_224',
-        # 'swin_tiny_patch4_window7_224',
-        # 'convit_tiny'
+        'vgg16',  
+        'resnet18',
+        'resnet101',
+        'mobilenet_v2',
+        'densenet121',
+        'efficientnet_b0',
+        'vit_base_patch16_224'
     ]
     
     # Custom classifier configuration
@@ -81,11 +81,20 @@ class Config:
         RESULTS_DIR = "results"
     
     # Checkpoint management - TỰ ĐỘNG XÓA SAU KHI EVALUATE
-    AUTO_DELETE_CHECKPOINTS = False  # Xóa checkpoints sau khi evaluate xong mỗi model
+    AUTO_DELETE_CHECKPOINTS = True  # Xóa checkpoints sau khi evaluate xong mỗi model
     KEEP_RESULTS = True             # Luôn giữ results (Excel, charts)
     
     # Random seed for reproducibility
-    RANDOM_SEED = 123
+    RANDOM_SEED = 42
+    
+    # ===================== W&B Configuration =====================
+    # W&B tracking
+    USE_WANDB = False  # Set to False to disable wandb
+    WANDB_API_KEY = "8ad789629890d812ecffc9f0fce138a75f63f992"  # Your wandb API key
+    WANDB_PROJECT = "BurmeseGrape-Capstone"  # Tên project trên wandb
+    WANDB_ENTITY = None  # Tên team/user wandb (None = default user)
+    # EXPERIMENT_NAME sẽ được set động khi chạy (ví dụ: "experiment_1", "experiment_2")
+    EXPERIMENT_NAME = "baseline_exp1"  # ⚠️ THAY ĐỔI CHO MỖI EXPERIMENT
     
     @classmethod
     def get_num_classes(cls):
