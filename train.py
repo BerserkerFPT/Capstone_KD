@@ -18,6 +18,7 @@ except ImportError:
 
 from config import Config
 from models import get_model
+from losses import PolyFocalLoss, compute_class_weights
 from dataset import load_dataset, create_dataloaders
 from visualization import print_dataset_statistics, plot_training_history, plot_patience_period
 
@@ -238,10 +239,10 @@ def validate(model, val_loader, criterion, device):
     return epoch_loss, epoch_acc
 
 
-def train_model(model_name, train_loader, val_loader, num_classes, device, class_names=None, test_loader=None):
+def train_model(model_name, train_loader, val_loader, num_classes, device, class_names=None, test_loader=None, train_labels=None):
     """
     Train a single model
-    
+
     Args:
         model_name: Name of the model
         train_loader: Training dataloader
@@ -250,7 +251,8 @@ def train_model(model_name, train_loader, val_loader, num_classes, device, class
         device: Device to train on
         class_names: List of class names (optional, for visualization)
         test_loader: Test dataloader (optional, for final test evaluation)
-    
+        train_labels: List of training labels (optional, for computing class weights)
+
     Returns:
         checkpoint_manager: CheckpointManager object
         history: Training history dictionary
@@ -312,7 +314,29 @@ def train_model(model_name, train_loader, val_loader, num_classes, device, class
     model = model.to(device)
     
     # Loss and optimizer
-    criterion = nn.CrossEntropyLoss()
+    if Config.LOSS_FUNCTION == 'poly_focal':
+        # Compute class weights from training labels
+        if train_labels is not None:
+            class_weights = compute_class_weights(train_labels, method=Config.CLASS_WEIGHT_METHOD)
+            print(f"  Class weights ({Config.CLASS_WEIGHT_METHOD}):")
+            if class_names:
+                for i, name in enumerate(class_names):
+                    print(f"    {name}: {class_weights[i]:.4f}")
+            else:
+                print(f"    {class_weights.tolist()}")
+        else:
+            class_weights = None
+            print("  Warning: No train_labels provided, using equal class weights")
+
+        criterion = PolyFocalLoss(
+            gamma=Config.FOCAL_GAMMA,
+            epsilon=Config.POLY_EPSILON,
+            alpha=class_weights
+        )
+        print(f"  Loss: PolyFocalLoss(gamma={Config.FOCAL_GAMMA}, epsilon={Config.POLY_EPSILON})")
+    else:
+        criterion = nn.CrossEntropyLoss()
+        print(f"  Loss: CrossEntropyLoss")
     optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), 
                           lr=Config.LEARNING_RATE,
                           weight_decay=Config.WEIGHT_DECAY)  # L2 regularization
@@ -518,11 +542,12 @@ if __name__ == "__main__":
     
     # Train first model as test
     checkpoint_manager, history = train_model(
-        Config.MODELS[0], 
-        train_loader, 
-        val_loader, 
-        num_classes, 
+        Config.MODELS[0],
+        train_loader,
+        val_loader,
+        num_classes,
         device,
         class_names=class_names,
-        test_loader=test_loader
+        test_loader=test_loader,
+        train_labels=train_labels
     )

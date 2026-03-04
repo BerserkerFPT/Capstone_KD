@@ -39,6 +39,15 @@ class Config:
     LR_DECAY_PATIENCE = 5  # Reduce LR if val_loss doesn't improve for 5 epochs
     LR_DECAY_FACTOR = 0.5  # Multiply LR by this factor when decaying
     
+    # ===================== Loss Function Configuration =====================
+    # Loss function: 'cross_entropy' or 'poly_focal'
+    LOSS_FUNCTION = 'poly_focal'
+
+    # PolyFocalLoss parameters (only used when LOSS_FUNCTION = 'poly_focal')
+    FOCAL_GAMMA = 2.0       # Focusing parameter: higher = more focus on hard examples
+    POLY_EPSILON = 1.0      # Poly coefficient: boosts gradient for ambiguous samples
+    CLASS_WEIGHT_METHOD = 'inverse_freq'  # 'inverse_freq' or 'effective_num'
+
     # ===================== Model Configuration =====================
     MODELS = [
         # 'vgg16',  

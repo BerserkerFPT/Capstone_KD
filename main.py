@@ -237,7 +237,8 @@ def main():
                 val_loader,
                 num_classes,
                 device,
-                class_names=class_names
+                class_names=class_names,
+                train_labels=train_labels
             )
             print(f"  ✓ Training completed for {model_name}")
             
@@ -326,7 +327,11 @@ def main():
             'learning_rate': Config.LEARNING_RATE,
             'early_stopping_patience': Config.EARLY_STOPPING_PATIENCE,
             'classifier_config': Config.CLASSIFIER_CONFIG,
-            'dropout_rate': Config.DROPOUT_RATE
+            'dropout_rate': Config.DROPOUT_RATE,
+            'loss_function': Config.LOSS_FUNCTION,
+            'focal_gamma': Config.FOCAL_GAMMA if Config.LOSS_FUNCTION == 'poly_focal' else None,
+            'poly_epsilon': Config.POLY_EPSILON if Config.LOSS_FUNCTION == 'poly_focal' else None,
+            'class_weight_method': Config.CLASS_WEIGHT_METHOD if Config.LOSS_FUNCTION == 'poly_focal' else None
         }
     }
     
