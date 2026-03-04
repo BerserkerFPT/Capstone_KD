@@ -15,7 +15,7 @@ from datetime import datetime
 from config import Config
 from dataset import load_dataset, create_dataloaders
 from train import train_model, CheckpointManager
-from evaluate import evaluate_all_strategies, export_results_to_excel, create_performance_charts
+from evaluate import evaluate_all_strategies, export_results_to_excel, create_performance_charts, save_confusion_matrices
 from visualization import print_dataset_statistics
 
 
@@ -53,40 +53,63 @@ def get_next_run_folder(base_results_dir):
     return run_folder, next_run
 
 
-def save_model_results(model_name, results, output_dir):
+def save_model_results(model_name, results, output_dir, class_names=None):
     """
-    Save individual model results to Excel and create chart
-    
+    Save individual model results to Excel (with per-class sheet) and confusion matrix images
+
     Args:
         model_name: Name of the model
-        results: Dictionary with strategy results
+        results: Dictionary with strategy results. Each value has keys: 'metrics', 'per_class', 'confusion_matrix'
         output_dir: Directory to save results
+        class_names: List of class names
     """
     model_dir = os.path.join(output_dir, model_name)
     os.makedirs(model_dir, exist_ok=True)
-    
-    # Create dataframe for this model
-    rows = []
-    for strategy_name, metrics in results.items():
-        row = {
+
+    # Build macro and per-class dataframes
+    macro_rows = []
+    per_class_rows = []
+    for strategy_name, result in results.items():
+        macro_row = {
             'Model': model_name,
             'Strategy': strategy_name,
-            **metrics
+            **result['metrics']
         }
-        rows.append(row)
-    
-    df = pd.DataFrame(rows)
-    
-    # Reorder columns (including Test Loss)
-    column_order = ['Model', 'Strategy', 'Test Loss', 'Accuracy (%)', 'Precision (%)', 
+        macro_rows.append(macro_row)
+
+        for cls_name, cls_metrics in result['per_class'].items():
+            pc_row = {
+                'Model': model_name,
+                'Strategy': strategy_name,
+                'Class': cls_name,
+                **cls_metrics
+            }
+            per_class_rows.append(pc_row)
+
+    df = pd.DataFrame(macro_rows)
+    column_order = ['Model', 'Strategy', 'Test Loss', 'Accuracy (%)', 'Precision (%)',
                    'Recall (%)', 'F1-Score (%)', 'AUC (%)']
     df = df[column_order]
-    
-    # Save to Excel
+
+    df_pc = pd.DataFrame(per_class_rows)
+    pc_column_order = ['Model', 'Strategy', 'Class', 'Precision (%)', 'Recall (%)',
+                       'F1-Score (%)', 'Specificity (%)', 'AUC (%)', 'Support']
+    df_pc = df_pc[pc_column_order]
+
+    # Save to Excel with multiple sheets
     excel_path = os.path.join(model_dir, f'{model_name}_results.xlsx')
-    df.to_excel(excel_path, index=False)
+    with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
+        df.to_excel(writer, sheet_name='Overall Metrics', index=False)
+        df_pc.to_excel(writer, sheet_name='Per-Class Metrics', index=False)
     print(f"  ✓ Results saved to: {excel_path}")
-    
+
+    # Save confusion matrix heatmaps for this model
+    save_confusion_matrices(
+        {model_name: results},
+        model_dir,
+        class_names=class_names
+    )
+
     return df
 
 
@@ -228,14 +251,15 @@ def main():
                 test_loader,
                 train_loader,  # CRITICAL: Pass train_loader for BatchNorm update
                 num_classes,
-                device
+                device,
+                class_names=class_names
             )
             all_model_results[model_name] = results
             print(f"  ✓ Evaluation completed for {model_name}")
             
             # 3.3: Save individual model results
             print(f"\n  [3.3] Saving results for {model_name}...")
-            save_model_results(model_name, results, run_folder)
+            save_model_results(model_name, results, run_folder, class_names=class_names)
             
             # 3.4: Delete checkpoints to free disk space
             print(f"\n  [3.4] Cleaning up checkpoints for {model_name}...")
@@ -265,7 +289,7 @@ def main():
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     excel_path = os.path.join(run_folder, f'all_models_results.xlsx')
     
-    df = export_results_to_excel(all_model_results, excel_path)
+    df = export_results_to_excel(all_model_results, excel_path, class_names=class_names)
     
     # Display summary
     print("\n" + "="*70)
@@ -276,6 +300,10 @@ def main():
     # Step 5: Generate combined performance charts
     print(f"\n[Step 5/6] Generating combined performance chart...")
     create_performance_charts(df, run_folder)
+
+    # Save combined confusion matrices
+    print(f"\n  Saving confusion matrices for all models...")
+    save_confusion_matrices(all_model_results, run_folder, class_names=class_names)
     
     # Step 6: Save experiment info
     print(f"\n[Step 6/6] Saving experiment metadata...")
@@ -312,7 +340,10 @@ def main():
     print(f"\n📊 Lần chạy #{run_number}:")
     print(f"  - Folder: {run_folder}")
     print(f"  - Combined Excel: {excel_path}")
+    print(f"    + Sheet 'Overall Metrics': Macro-averaged metrics")
+    print(f"    + Sheet 'Per-Class Metrics': Per-class breakdown")
     print(f"  - Combined Chart: {os.path.join(run_folder, 'performance_comparison.png')}")
+    print(f"  - Confusion Matrices: {os.path.join(run_folder, 'confusion_matrices/')}")
     print(f"  - Experiment Info: {info_path}")
     print(f"  - Individual Results: {run_folder}/<model_name>/")
     print(f"\n💾 Disk Space Optimization:")
