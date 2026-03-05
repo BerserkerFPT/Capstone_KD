@@ -248,7 +248,12 @@ def evaluate_model(model, test_loader, device, num_classes, class_names=None):
         except:
             class_auc = 0.0
 
+        # Accuracy = (TP + TN) / Total
+        total = cm.sum()
+        accuracy = ((tp + tn) / total * 100) if total > 0 else 0.0
+
         per_class[cls_name] = {
+            'Accuracy (%)': accuracy,
             'Precision (%)': pc_precision[i],
             'Recall (%)': pc_recall[i],
             'F1-Score (%)': pc_f1[i],
@@ -282,11 +287,12 @@ def _print_eval_results(metrics, per_class, prefix="    ", header="TEST RESULTS"
     print(f"{prefix}{'-'*60}")
     print(f"{prefix}Per-Class Breakdown:")
     print(f"{prefix}{'-'*60}")
-    header_fmt = f"{prefix}  {'Class':<35} {'Prec':>6} {'Rec':>6} {'F1':>6} {'Spec':>6} {'AUC':>6} {'Sup':>5}"
+    header_fmt = f"{prefix}  {'Class':<35} {'Acc':>6} {'Prec':>6} {'Rec':>6} {'F1':>6} {'Spec':>6} {'AUC':>6} {'Sup':>5}"
     print(header_fmt)
-    print(f"{prefix}  {'-'*35} {'-'*6} {'-'*6} {'-'*6} {'-'*6} {'-'*6} {'-'*5}")
+    print(f"{prefix}  {'-'*35} {'-'*6} {'-'*6} {'-'*6} {'-'*6} {'-'*6} {'-'*6} {'-'*5}")
     for cls_name, cls_metrics in per_class.items():
         print(f"{prefix}  {cls_name:<35} "
+              f"{cls_metrics['Accuracy (%)']:>5.1f}% "
               f"{cls_metrics['Precision (%)']:>5.1f}% "
               f"{cls_metrics['Recall (%)']:>5.1f}% "
               f"{cls_metrics['F1-Score (%)']:>5.1f}% "
@@ -538,7 +544,7 @@ def export_results_to_excel(all_model_results, output_path, class_names=None):
 
     # Per-class dataframe
     df_pc = pd.DataFrame(per_class_rows)
-    pc_column_order = ['Model', 'Strategy', 'Class', 'Precision (%)', 'Recall (%)',
+    pc_column_order = ['Model', 'Strategy', 'Class', 'Accuracy (%)', 'Precision (%)', 'Recall (%)',
                        'F1-Score (%)', 'Specificity (%)', 'AUC (%)', 'Support']
     df_pc = df_pc[pc_column_order]
 
