@@ -221,7 +221,7 @@ def create_dataloaders(train_paths, train_labels, val_paths, val_labels,
         shuffle=True,
         num_workers=num_workers,
         pin_memory=use_cuda,  # Only use pin_memory with CUDA
-        persistent_workers=use_persistent,  # Keep workers alive between epochs
+        persistent_workers=True,  # Keep workers alive between epochs
         worker_init_fn=worker_init_fn_seed,  # Use module-level function (not lambda) for Windows pickle
         generator=torch.Generator().manual_seed(Config.RANDOM_SEED),  # Shuffle reproducibility
         prefetch_factor=2 if num_workers > 0 else None  # Prefetch batches for faster loading
@@ -233,7 +233,7 @@ def create_dataloaders(train_paths, train_labels, val_paths, val_labels,
         shuffle=False,
         num_workers=num_workers,
         pin_memory=use_cuda,  # Only use pin_memory with CUDA
-        persistent_workers=use_persistent,  # Keep workers alive
+        persistent_workers=True,  # Keep workers alive
         prefetch_factor=2 if num_workers > 0 else None
     )
 
@@ -243,7 +243,7 @@ def create_dataloaders(train_paths, train_labels, val_paths, val_labels,
         shuffle=False,
         num_workers=num_workers,
         pin_memory=use_cuda,  # Only use pin_memory with CUDA
-        persistent_workers=use_persistent,  # Keep workers alive
+        persistent_workers=True,  # Keep workers alive
         prefetch_factor=2 if num_workers > 0 else None
     )
 
