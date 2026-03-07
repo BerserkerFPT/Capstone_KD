@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from tqdm import tqdm
-
+from collections import Counter
 try:
     import wandb
     WANDB_AVAILABLE = True
@@ -335,9 +335,17 @@ def train_model(model_name, train_loader, val_loader, num_classes, device, class
         )
         print(f"  Loss: PolyFocalLoss(gamma={Config.FOCAL_GAMMA}, epsilon={Config.POLY_EPSILON})")
     else:
+        # train_labels_list = train_loader.dataset.labels
+        # label_counts = Counter(train_labels_list)
+        # total_samples = len(train_labels_list)
+        # class_weights = torch.tensor(
+        #     [total_samples / (num_classes * label_counts[i]) for i in range(num_classes)],
+        #     dtype=torch.float32
+        # ).to(device)
+        # print(f"  Class weights: {class_weights.cpu().tolist()}")
         criterion = nn.CrossEntropyLoss()
-        print(f"  Loss: CrossEntropyLoss")
-    optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), 
+        print(f"  Loss: CrossEntropyLoss (weighted)")
+    optimizer = optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), 
                           lr=Config.LEARNING_RATE,
                           weight_decay=Config.WEIGHT_DECAY)  # L2 regularization
     
@@ -551,3 +559,4 @@ if __name__ == "__main__":
         test_loader=test_loader,
         train_labels=train_labels
     )
+

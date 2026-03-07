@@ -4,17 +4,8 @@ Configuration file for baseline research
 import os
 
 class Config:
-    # ===================== Dataset Configuration =====================
-    # Tự động detect môi trường (Kaggle hoặc local)
-    if os.path.exists('/kaggle/input'):
-        # Kaggle environment - cập nhật path này theo dataset của bạn trên Kaggle
-        DATASET_PATH = "/kaggle/input/tomato-dataset/TomatoDataset"  # Thay đổi theo tên dataset trên Kaggle
-    elif os.path.exists("/home/student/vuthde181070/dataset/TomatoDataset"):
-        # Server environment
-        DATASET_PATH = "/home/student/vuthde181070/dataset/TomatoDataset"
-    else:
-        # Local environment
-        DATASET_PATH = r"/home/student/TomatoDataset"
+
+    DATASET_PATH = r"/home/student/TomatoDataset"
     # Train/Val/Test split ratios
     TRAIN_RATIO = 0.7
     VAL_RATIO = 0.15
@@ -22,10 +13,10 @@ class Config:
         
     # ===================== Training Configuration =====================
     BATCH_SIZE = 32
-    NUM_EPOCHS = 150
-    LEARNING_RATE = 1.5e-4
-    WEIGHT_DECAY = 1e-4  # L2 regularization để chống overfitting
-    WARMUP_EPOCHS = int(NUM_EPOCHS * 0.06)
+    NUM_EPOCHS = 50
+    LEARNING_RATE = 9e-7
+    WEIGHT_DECAY = 0.1  # L2 regularization để chống overfitting
+    WARMUP_EPOCHS = int(NUM_EPOCHS * 0.1)
     ETA_MIN = 1e-5 #For CosineAnnealing LR
   # Convert to integer for scheduler
     # Kaggle có 2 CPU cores, nên dùng NUM_WORKERS = 2
@@ -33,7 +24,7 @@ class Config:
     NUM_WORKERS = 16
     
     # Early Stopping
-    EARLY_STOPPING_PATIENCE = 15  # Stop if val_loss doesn't improve for 15 epochs
+    EARLY_STOPPING_PATIENCE = 10  # Stop if val_loss doesn't improve for 15 epochs
     
     # Learning Rate Decay
     LR_DECAY_PATIENCE = 5  # Reduce LR if val_loss doesn't improve for 5 epochs
@@ -41,7 +32,7 @@ class Config:
     
     # ===================== Loss Function Configuration =====================
     # Loss function: 'cross_entropy' or 'poly_focal'
-    LOSS_FUNCTION = 'poly_focal'
+    LOSS_FUNCTION = 'cross_entropy'  # Thay đổi thành 'poly_focal' để sử dụng PolyFocalLoss
 
     # PolyFocalLoss parameters (only used when LOSS_FUNCTION = 'poly_focal')
     FOCAL_GAMMA = 2.0       # Focusing parameter: higher = more focus on hard examples
@@ -53,10 +44,10 @@ class Config:
         # 'vgg16',  
         # 'resnet18',
         # 'resnet101',
-        'mobilenet_v2'
+        # 'mobilenet_v2'
         # 'densenet121'
         # 'efficientnet_b0',
-        # 'vit_base_patch16_224'
+        'vit_base_patch16_224'
     ]
     
     # Custom classifier configuration

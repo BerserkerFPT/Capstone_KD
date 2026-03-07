@@ -45,7 +45,7 @@ class TransformerClassifier(nn.Module):
         # Add hidden layers from config
         for hidden_dim in Config.CLASSIFIER_CONFIG:
             layers.extend([
-                nn.LayerNorm(prev_dim),
+                nn.LayerNorm(prev_dim),  # LayerNorm is better for Transformers
                 nn.Linear(prev_dim, hidden_dim),
                 nn.GELU(),  # GELU is better for Transformers
                 nn.Dropout(Config.DROPOUT_RATE)
@@ -175,7 +175,7 @@ def get_model(model_name, num_classes, freeze_backbone=False):
         model.head.fc = CustomClassifier(in_features, num_classes)
 
     elif model_name == 'vit_base_patch16_224':
-        model = timm.create_model('vit_base_patch16_224', pretrained=True)
+        model = timm.create_model('vit_base_patch16_224', pretrained=True, drop_rate=0.1,drop_path_rate=0.2,attn_drop_rate=0.1)
         in_features = model.head.in_features
         # Freeze or unfreeze backbone
         if freeze_backbone:
