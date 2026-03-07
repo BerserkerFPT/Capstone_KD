@@ -22,26 +22,27 @@ from dataset import DatasetHandler
 torch.use_deterministic_algorithms(True, warn_only=True)
 
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+
 class StudentWithHead(nn.Module):
     """
     Student model với classification head
     """
-    def __init__(self, num_classes, pretrained=True):
+    def __init__(self, num_classes, pretrained=True, feature_dim=96,
+                 fc_hidden=None, fc_dropout=0.7):
         super().__init__()
+        if fc_hidden is None:
+            fc_hidden = [512, 256]
         self.backbone = StudentExtractor(pretrained=pretrained)
         
-        # Classification head: Global Average Pooling + MLP (1024 -> 256 -> 128 -> num_classes)
+        # Classification head: Global Average Pooling + MLP
         self.gap = nn.AdaptiveAvgPool2d(1)
-        self.classifier = nn.Sequential(
-            nn.Linear(96, 512),
-            nn.ReLU(),
-            nn.Dropout(0.7),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Dropout(0.7),
-            nn.Linear(256, num_classes)
-        )
+        layers = []
+        in_dim = feature_dim
+        for h in fc_hidden:
+            layers += [nn.Linear(in_dim, h), nn.ReLU(), nn.Dropout(fc_dropout)]
+            in_dim = h
+        layers.append(nn.Linear(in_dim, num_classes))
+        self.classifier = nn.Sequential(*layers)
     
     def forward(self, x):
         """
@@ -232,6 +233,7 @@ class DistillationPipeline:
         lambda1=1.0,  # weight for L_proj1 (PCA loss)
         lambda2=1.0,  # weight for L_proj2 (GL loss)
         lambda3=1.0,  # weight for L_logits (Hinton loss)
+        lambda4=1.0,  # weight for DIST loss
         patience=15,  # early stopping patience
         start_factor_student=1e-8,
         # start_factor_teacher=1e-8,  # warmup start factor
@@ -243,8 +245,15 @@ class DistillationPipeline:
         dist_gamma=2.0,
         last_n_epochs=10,
         keep_last_n=10,
-        keep_top_k=5
-        # eta_min_teacher=1e-7,  # cosine annealing min lr  
+        keep_top_k=5,
+        # eta_min_teacher=1e-7,  # cosine annealing min lr
+        teacher_checkpoint=None,
+        student_fc_dropout=0.7,
+        student_fc_hidden=None,
+        pca_dropout=0.5,
+        pca_partial_p=0.5,
+        gw_drop_p=0.4,
+        label_smoothing=0.1,
     ):
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         self.epochs = epochs
@@ -254,6 +263,7 @@ class DistillationPipeline:
         self.lambda1 = lambda1
         self.lambda2 = lambda2
         self.lambda3 = lambda3
+        self.lambda4 = lambda4
         self.temperature = temperature
         self.patience = patience
         self.start_factor_student = start_factor_student
@@ -263,6 +273,14 @@ class DistillationPipeline:
         self.dist_gamma = dist_gamma
         # self.eta_min_teacher = eta_min_teacher,
         os.makedirs(save_dir, exist_ok=True)
+        
+        # Auto-detect experiment run number
+        run_number = 1
+        while os.path.exists(os.path.join(save_dir, f"run_{run_number}")):
+            run_number += 1
+        self.save_dir = os.path.join(save_dir, f"run_{run_number}")
+        os.makedirs(self.save_dir, exist_ok=True)
+        print(f"📂 Experiment run #{run_number}, saving to: {self.save_dir}")
         
         # ===== Dataset =====
         print("Loading dataset...")
@@ -283,14 +301,19 @@ class DistillationPipeline:
         
         # Teacher (frozen, inference only)
         self.teacher = TeacherExtractor(pretrained=False,
-                                        checkpoint_path=r"/home/student/dunglmde180498/Capstone_KD-Burmese/results/ViT-88.46/vit_base_patch16_224/saved_checkpoints/strategy2_top_3_averaged.pth",
+                                        checkpoint_path=teacher_checkpoint,
                                         block_ids=block_ids,
                                         block_qkv_id=block_qkv_id)
         self.teacher.to(self.device)
         print("✅ Teacher (ViT-B/16) loaded and frozen")
         
         # Student with classification head
-        self.student = StudentWithHead(num_classes=num_classes, pretrained=True)
+        self.student_fc_dropout = student_fc_dropout
+        self.student_fc_hidden = student_fc_hidden if student_fc_hidden else [512, 256]
+        self.student = StudentWithHead(
+            num_classes=num_classes, pretrained=True,
+            fc_hidden=self.student_fc_hidden, fc_dropout=self.student_fc_dropout
+        )
         self.student = self.student.to(self.device)
         print("✅ Student (ResNet-50) loaded")
         
@@ -300,17 +323,24 @@ class DistillationPipeline:
         # print("✅ Teacher Head (trainable) loaded")
         
         # Projectors
-        self.pca_projector = PCAttentionProjector(in_channels=96, embed_dim=768)
+        self.pca_dropout = pca_dropout
+        self.pca_partial_p = pca_partial_p
+        self.gw_drop_p = gw_drop_p
+        self.pca_projector = PCAttentionProjector(
+            in_channels=96, embed_dim=768,
+            p=self.pca_partial_p, dropout=self.pca_dropout
+        )
         self.pca_projector = self.pca_projector.to(self.device)
         print("✅ PCA Projector loaded")
         
-        self.gl_projector = GWLinearProjector(in_dim=96, out_dim=768)
+        self.gl_projector = GWLinearProjector(in_dim=96, out_dim=768, drop_p=self.gw_drop_p)
         self.gl_projector = self.gl_projector.to(self.device)
         print("✅ GL Projector loaded")
         
         # ===== Loss functions =====
+        self.label_smoothing = label_smoothing
         self.kd_loss_fn = TotalKDLoss()
-        self.ce_loss_fn = nn.CrossEntropyLoss(label_smoothing=0.1)
+        self.ce_loss_fn = nn.CrossEntropyLoss(label_smoothing=self.label_smoothing)
         self.logits_loss = LogitsKDLoss(temperature=temperature)
         self.dist_loss_fn = DIST(beta=dist_beta, gamma=dist_gamma)
         # ===== Optimizer (chỉ train student + projectors) =====
@@ -329,7 +359,7 @@ class DistillationPipeline:
         
         # Checkpoint Manager (keeps last N + top K best checkpoints)
         self.checkpoint_manager = CheckpointManager(
-            save_dir=save_dir,
+            save_dir=self.save_dir,
             keep_last_n=keep_last_n,
             keep_top_k=keep_top_k
         )
@@ -444,7 +474,7 @@ class DistillationPipeline:
             
             # ===== TÍNH LOSS RIÊNG =====
             # Loss cho STUDENT (KHÔNG có ce_loss_teacher!)(Offline learning)
-            loss_student = ce_loss_s + self.lambda1 * l_proj1 + self.lambda2 * l_proj2 + self.lambda3 * logits_kd_loss + dist_loss
+            loss_student = ce_loss_s + self.lambda1 * l_proj1 + self.lambda2 * l_proj2 + self.lambda3 * logits_kd_loss + self.lambda4 * dist_loss
             # Loss cho TEACHER HEAD (chỉ CE)
             # loss_teacher = ce_loss_t
 
@@ -492,7 +522,7 @@ class DistillationPipeline:
             "l1_weighted": (total_l1 / len(self.train_loader)) * self.lambda1,
             "l2_weighted": (total_l2 / len(self.train_loader)) * self.lambda2,
             "l3_weighted": (total_logits_loss / len(self.train_loader)) * self.lambda3,
-            "dist_weighted": (total_dist_loss / len(self.train_loader)), # Note: this is last batch loss, ideally average it too but acceptable for now or add accumulator
+            "dist_weighted": (total_dist_loss / len(self.train_loader)) * self.lambda4,
             "accuracy": accuracy
         }
     
@@ -787,7 +817,10 @@ class DistillationPipeline:
 
     def _create_student_model(self):
         """Create a fresh StudentWithHead for loading averaged weights"""
-        model = StudentWithHead(num_classes=self.num_classes, pretrained=False)
+        model = StudentWithHead(
+            num_classes=self.num_classes, pretrained=False,
+            fc_hidden=self.student_fc_hidden, fc_dropout=self.student_fc_dropout
+        )
         return model.to(self.device)
 
     def _print_strategy_results(self, metrics, strategy_name, class_names):
@@ -951,11 +984,11 @@ class DistillationPipeline:
         return all_results
 
     def _export_all_strategies_to_excel(self, all_results, class_names):
-        """Export all strategy results (overall + per-class + confusion matrix) to Excel"""
+        """Export all strategy results to Excel with 2 sheets: Macro Results + Per-Class Metrics"""
         excel_path = os.path.join(self.save_dir, "all_strategies_results.xlsx")
 
         with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
-            # ===== Sheet 1: Overall Summary =====
+            # ===== Sheet 1: Macro Results =====
             summary_rows = []
             for strategy_name, metrics in all_results.items():
                 summary_rows.append({
@@ -968,49 +1001,34 @@ class DistillationPipeline:
                     "AUC (%)": round(metrics['AUC (%)'], 2),
                 })
             df_summary = pd.DataFrame(summary_rows)
-            df_summary.to_excel(writer, sheet_name="Overall Summary", index=False)
+            df_summary.to_excel(writer, sheet_name="Macro Results", index=False)
 
-            # ===== Per-strategy sheets: Per-class metrics + Confusion matrix =====
+            # ===== Sheet 2: Per-Class Metrics for all strategies =====
+            per_class_rows = []
             for strategy_name, metrics in all_results.items():
-                # Sheet name max 31 chars
-                sheet_base = strategy_name.replace("(", "").replace(")", "").replace(" ", "_")[:25]
+                if 'classification_report' not in metrics or 'confusion_matrix' not in metrics:
+                    continue
+                report = metrics['classification_report']
+                cm = metrics['confusion_matrix']
 
-                if 'classification_report' in metrics:
-                    report = metrics['classification_report']
-                    rows = []
-                    for cls_name in class_names:
-                        m = report[cls_name]
-                        rows.append({
-                            "Class": cls_name,
-                            "Precision": round(m["precision"], 4),
-                            "Recall": round(m["recall"], 4),
-                            "F1-Score": round(m["f1-score"], 4),
-                            "Support": int(m["support"])
-                        })
-                    for avg_type in ["macro avg", "weighted avg"]:
-                        m = report[avg_type]
-                        rows.append({
-                            "Class": avg_type.title(),
-                            "Precision": round(m["precision"], 4),
-                            "Recall": round(m["recall"], 4),
-                            "F1-Score": round(m["f1-score"], 4),
-                            "Support": int(m["support"])
-                        })
-                    rows.append({
-                        "Class": "Overall Accuracy",
-                        "Precision": "",
-                        "Recall": "",
-                        "F1-Score": round(report["accuracy"], 4),
-                        "Support": int(report["macro avg"]["support"])
+                for idx, cls_name in enumerate(class_names):
+                    m = report[cls_name]
+                    # Per-class accuracy = correctly classified / total samples of this class
+                    cls_total = cm[idx].sum()
+                    cls_accuracy = (cm[idx][idx] / cls_total * 100) if cls_total > 0 else 0.0
+                    per_class_rows.append({
+                        "Strategy": strategy_name,
+                        "Class": cls_name,
+                        "Accuracy (%)": round(cls_accuracy, 2),
+                        "Precision (%)": round(m["precision"] * 100, 2),
+                        "Recall (%)": round(m["recall"] * 100, 2),
+                        "F1-Score (%)": round(m["f1-score"] * 100, 2),
+                        "Support": int(m["support"])
                     })
-                    df_cls = pd.DataFrame(rows)
-                    df_cls.to_excel(writer, sheet_name=f"{sheet_base}_cls", index=False)
 
-                if 'confusion_matrix' in metrics:
-                    cm = metrics['confusion_matrix']
-                    df_cm = pd.DataFrame(cm, index=class_names, columns=class_names)
-                    df_cm.index.name = "Actual \\ Predicted"
-                    df_cm.to_excel(writer, sheet_name=f"{sheet_base}_cm")
+            if per_class_rows:
+                df_per_class = pd.DataFrame(per_class_rows)
+                df_per_class.to_excel(writer, sheet_name="Per-Class Metrics", index=False)
 
         print(f"\n📁 All strategies results exported to: {excel_path}")
 
@@ -1060,42 +1078,12 @@ class DistillationPipeline:
 
 # ===== Main =====
 if __name__ == "__main__":
-    # Configuration
-    config = {
-        "data_dir": r"/home/student/Burmese-Version1",
-        "num_workers": 16,
-        "num_classes": 5,
-        "batch_size": 16,
-        "epochs": 100 ,
-        # ===== STUDENT CONFIG =====
-        "lr_student": 2e-4,
-        "warmup_epochs_student": int(0.1 * 100),  # 10 epochs
-        "start_factor_student": 0.1,
-        "eta_min_student": 1e-6,
-        
-        # # ===== TEACHER HEAD CONFIG (riêng biệt) =====
-        # "lr_teacher": 8e-5,  # ← LR cao hơn cho teacher head
-        # "warmup_epochs_teacher": int(0.01 * 100),  # 5 epochs (ngắn hơn)
-        # "start_factor_teacher": 0.01,  # ← Start cao hơn
-        # "eta_min_teacher": 1e-8,  # ← Min LR cao hơn
-        ##### Chỉnh vị trí lấy ma trận Q,K,V và output transformer block #####
-        "block_ids":[0],
-        "block_qkv_id":[11],
-        # ===== COMMON =====
-        "device": "cuda",
-        "save_dir": "checkpoints",
-        "lambda1": 0.05,
-        "lambda2": 0.05,
-        "lambda3": 0.5,
-        "temperature": 4,
-        "patience": 20,
-        "dist_beta": 2.0,
-        "dist_gamma": 2.0,
-        # ===== EVALUATION STRATEGIES =====
-        "last_n_epochs": 10,   # Strategy 3: trung bình N trọng số cuối
-        "keep_last_n": 10,     # Giữ N checkpoint cuối trong quá trình train
-        "keep_top_k": 5,       # Giữ K checkpoint tốt nhất trong quá trình train
-    }
+    from config import Config
+
+    os.environ["CUDA_VISIBLE_DEVICES"] = Config.CUDA_VISIBLE_DEVICES
+
+    Config.print_config()
+    config = Config.to_pipeline_dict()
     print(f"[KD] block_ids = {config['block_ids']}")
     print(f"[KD] block_qkv_id = {config['block_qkv_id']}")
     pipeline = DistillationPipeline(**config)

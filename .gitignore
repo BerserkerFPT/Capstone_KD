@@ -4,3 +4,5 @@
 # Ignore the checkpoints directory (optional, if you want to ignore all its contents)
 checkpoints/
 *.pth
+
+__pycache__/
