@@ -159,9 +159,9 @@ def main():
         torch.cuda.manual_seed(Config.RANDOM_SEED)
         torch.cuda.manual_seed_all(Config.RANDOM_SEED)
         # For CUDA reproducibility (may impact performance slightly)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
-    torch.use_deterministic_algorithms(True,warn_only=False)
+        torch.backends.cudnn.deterministic = False
+        torch.backends.cudnn.benchmark = True
+    # torch.use_deterministic_algorithms(True,warn_only=False)
     print("✓ Random seeds set successfully")
     
     # Step 1: Validate configuration
