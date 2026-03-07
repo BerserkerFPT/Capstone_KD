@@ -45,6 +45,7 @@ class TransformerClassifier(nn.Module):
         # Add hidden layers from config
         for hidden_dim in Config.CLASSIFIER_CONFIG:
             layers.extend([
+                nn.LayerNorm(prev_dim),
                 nn.Linear(prev_dim, hidden_dim),
                 nn.GELU(),  # GELU is better for Transformers
                 nn.Dropout(Config.DROPOUT_RATE)
