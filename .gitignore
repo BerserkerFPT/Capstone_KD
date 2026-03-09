@@ -1,8 +1,9 @@
 # Ignore all .pth files everywhere in the repo
 *.pth
 
-# Ignore the checkpoints directory (optional, if you want to ignore all its contents)
+# Ignore the checkpoints directory
 checkpoints/
-*.pth
 
+# Ignore Python cache
 __pycache__/
+*.pyc
