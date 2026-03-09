@@ -18,6 +18,22 @@ class CustomHead(nn.Module):
     def forward(self, x):
         return self.classifier(x)
 
+# class CustomHead(nn.Module):
+#     def __init__(self):
+#         super().__init__()
+#         prev_dim = 768
+#         hidden_dim = 512
+
+#         self.classifier = nn.Sequential(
+#             nn.LayerNorm(prev_dim),
+#             nn.Linear(prev_dim, hidden_dim),
+#             nn.GELU(),
+#             nn.Dropout(0.4),
+#             nn.Linear(hidden_dim, 10)
+#         )
+
+#     def forward(self, x):
+#         return self.classifier(x)
 class TeacherExtractor:
     def __init__(self, 
                  model_name="vit_base_patch16_224", 

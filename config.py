@@ -6,7 +6,7 @@ Modify all hyperparameters here instead of editing main.py directly.
 
 class Config:
     # ===================== Dataset =====================
-    DATA_DIR = r"/workspace/kaggle/working/ProcessedOriginal"
+    DATA_DIR = r"/Capstone_KD_Testing_Ver1/kaggle/working/ProcessedOriginal"
     NUM_CLASSES = 5
     IMAGE_SIZE = 224
     BATCH_SIZE = 256
@@ -47,16 +47,16 @@ class Config:
     GW_DROP_P = 0.4                   # dropout in group-wise linear projector
 
     # ===================== Training =====================
-    EPOCHS = 100
-    LR_STUDENT = 4e-3
+    EPOCHS = 150
+    LR_STUDENT = 5e-3
 
     # Warmup + Cosine Annealing scheduler
-    WARMUP_EPOCHS_STUDENT = int(0.1 * EPOCHS)   # 10% of total epochs
+    WARMUP_EPOCHS_STUDENT = int(0.1 * EPOCHS)   # 15% of total epochs
     START_FACTOR_STUDENT = 0.1
-    ETA_MIN_STUDENT = 1e-6
+    ETA_MIN_STUDENT = 1e-8
 
     # Early stopping
-    PATIENCE = 20
+    PATIENCE = 30
 
     # ===================== Loss Weights =====================
     LAMBDA1 = 0.05          # L_proj1  (PCA attention loss)
@@ -65,6 +65,9 @@ class Config:
     LAMBDA4 = 0.75         # L_dist   (DIST loss)
 
     LABEL_SMOOTHING = 0.1   # CrossEntropyLoss label smoothing
+
+    # Ablation study: set False to disable PCA/GL projectors (CE + Logits / CE + Logits + Relation)
+    USE_PROJECTION = True
 
     # Hinton KD temperature
     TEMPERATURE = 4.0
@@ -123,6 +126,7 @@ class Config:
             "pca_partial_p": cls.PCA_PARTIAL_P,
             "gw_drop_p": cls.GW_DROP_P,
             "label_smoothing": cls.LABEL_SMOOTHING,
+            "use_projection": cls.USE_PROJECTION,
         }
 
     @classmethod

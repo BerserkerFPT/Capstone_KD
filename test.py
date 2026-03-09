@@ -24,13 +24,13 @@ class StudentWithHead(nn.Module):
         self.backbone = StudentExtractor(pretrained=pretrained)
         self.gap = nn.AdaptiveAvgPool2d(1)
         self.classifier = nn.Sequential(
-            nn.Linear(96, 256),
+            nn.Linear(96,512),
             nn.ReLU(),
             nn.Dropout(0.3),
-            nn.Linear(256, 128),
+            nn.Linear(512, 256),
             nn.ReLU(),
             nn.Dropout(0.3),
-            nn.Linear(128, num_classes)
+            nn.Linear(256, num_classes)
         )
     
     def forward(self, x):
@@ -137,11 +137,11 @@ def export_metrics_to_excel(metrics, class_names, save_path="test_metrics.xlsx")
 def main():
     # Config - PHẢI GIỐNG VỚI main.py
     config = {
-        "data_dir": r"/home/student/TomatoDataset",
+        "data_dir": r"/TomatoDataset",
         "num_classes": 10,
         "batch_size": 32,
         "num_workers": 16,
-        "checkpoint_path": "/home/student/vuthde181070_Tomato/Capstone_KD/checkpoints/best.pth",  # Đường dẫn checkpoint
+        "checkpoint_path": "/Capstone_KD_Testing_Ver1/checkpoints/run_7/saved_checkpoints/strategy3_last_10_averaged.pth",  # Đường dẫn checkpoint
         "device": "cuda:0"
     }
     

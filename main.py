@@ -17,7 +17,7 @@ from Teacher_extraction import TeacherExtractor
 from Student_extraction import StudentExtractor
 from PCA_projector import PCAttentionProjector
 from GWLinear_projector import GWLinearProjector
-from loss_functions import TotalKDLoss, LogitsKDLoss, DIST
+from loss_functions import ProjectionLoss, LogitsKDLoss, DIST
 from dataset import DatasetHandler
 torch.use_deterministic_algorithms(True, warn_only=True)
 
@@ -254,6 +254,7 @@ class DistillationPipeline:
         pca_partial_p=0.5,
         gw_drop_p=0.4,
         label_smoothing=0.1,
+        use_projection=True,  # ablation: set False to skip PCA/GL projectors
     ):
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         self.epochs = epochs
@@ -271,6 +272,7 @@ class DistillationPipeline:
         self.eta_min_student = eta_min_student
         self.dist_beta = dist_beta
         self.dist_gamma = dist_gamma
+        self.use_projection = use_projection
         # self.eta_min_teacher = eta_min_teacher,
         os.makedirs(save_dir, exist_ok=True)
         
@@ -322,31 +324,37 @@ class DistillationPipeline:
         # self.teacher_head = self.teacher_head.to(self.device)
         # print("✅ Teacher Head (trainable) loaded")
         
-        # Projectors
+        # Projectors (only created when use_projection=True)
         self.pca_dropout = pca_dropout
         self.pca_partial_p = pca_partial_p
         self.gw_drop_p = gw_drop_p
-        self.pca_projector = PCAttentionProjector(
-            in_channels=96, embed_dim=768,
-            p=self.pca_partial_p, dropout=self.pca_dropout
-        )
-        self.pca_projector = self.pca_projector.to(self.device)
-        print("✅ PCA Projector loaded")
-        
-        self.gl_projector = GWLinearProjector(in_dim=96, out_dim=768, drop_p=self.gw_drop_p)
-        self.gl_projector = self.gl_projector.to(self.device)
-        print("✅ GL Projector loaded")
+        if self.use_projection:
+            self.pca_projector = PCAttentionProjector(
+                in_channels=96, embed_dim=768,
+                p=self.pca_partial_p, dropout=self.pca_dropout
+            )
+            self.pca_projector = self.pca_projector.to(self.device)
+            print("✅ PCA Projector loaded")
+            
+            self.gl_projector = GWLinearProjector(in_dim=96, out_dim=768, drop_p=self.gw_drop_p)
+            self.gl_projector = self.gl_projector.to(self.device)
+            print("✅ GL Projector loaded")
+        else:
+            self.pca_projector = None
+            self.gl_projector = None
+            print("⏭️  Projectors skipped (use_projection=False)")
         
         # ===== Loss functions =====
         self.label_smoothing = label_smoothing
-        self.kd_loss_fn = TotalKDLoss()
+        self.kd_loss_fn = ProjectionLoss() if self.use_projection else None
         self.ce_loss_fn = nn.CrossEntropyLoss(label_smoothing=self.label_smoothing)
         self.logits_loss = LogitsKDLoss(temperature=temperature)
         self.dist_loss_fn = DIST(beta=dist_beta, gamma=dist_gamma)
-        # ===== Optimizer (chỉ train student + projectors) =====
-        trainable_params = list(self.student.parameters())    + \
-                          list(self.pca_projector.parameters()) + \
-                          list(self.gl_projector.parameters())
+        # ===== Optimizer (chỉ train student + projectors nếu có) =====
+        trainable_params = list(self.student.parameters())
+        if self.use_projection:
+            trainable_params += list(self.pca_projector.parameters()) + \
+                                list(self.gl_projector.parameters())
         # self.optimizer_teacher = optim.Adam(self.teacher_head.parameters(), lr=lr_teacher)
         self.optimizer_student = optim.Adam(trainable_params, lr=lr_student)
         
@@ -421,8 +429,9 @@ class DistillationPipeline:
     def train_one_epoch(self, epoch):
         """Train for one epoch"""
         self.student.train()
-        self.pca_projector.train()
-        self.gl_projector.train()
+        if self.use_projection:
+            self.pca_projector.train()
+            self.gl_projector.train()
         # self.teacher_head.train()  # ← Teacher head cũng train!
         total_loss = 0.0
         total_kd_loss = 0.0
@@ -444,31 +453,30 @@ class DistillationPipeline:
             # ===== Teacher forward (no grad) =====
             with torch.no_grad():
                 teacher_out = self.teacher.extract(images)
-            Q_t = teacher_out["Q_t"]
-            K_t = teacher_out["K_t"]
-            V_t = teacher_out["V_t"]
-            Attn_t = teacher_out["Attn_t"]
-            h_t = teacher_out["block_mean"]  # [B, 196, 768]
-            logit_t = teacher_out["logits"] 
+            logit_t = teacher_out["logits"]
+            if self.use_projection:
+                Q_t = teacher_out["Q_t"]
+                K_t = teacher_out["K_t"]
+                V_t = teacher_out["V_t"]
+                Attn_t = teacher_out["Attn_t"]
+                h_t = teacher_out["block_mean"]  # [B, 196, 768]
             
             # ===== Student forward =====
-            feat_map, logit_s = self.student(images) 
-            # ===== Teacher Head forward (để lấy teacher logits) =====
-            
-            # # ===== PCA Projector =====
-            pca_out = self.pca_projector(feat_map, Q_t, K_t, V_t)
-            PCAttn_s = pca_out["PCAttnS"]
-            V_s = pca_out["VS"]
-            
-            # # ===== GL Projector =====
-            h_s_proj = self.gl_projector(feat_map)  # [B, 196, 768]
-            
-            # ===== Calculate losses =====
-            l_proj1, l_proj2 = self.kd_loss_fn(Attn_t, PCAttn_s, V_t, V_s, h_t, h_s_proj)
-            ce_loss_s = self.ce_loss_fn(logit_s, labels)
-            # ce_loss_t = self.ce_loss_fn(logit_t, labels) 
-            # ===== NEW: Logits Loss (Hinton) ====
+            feat_map, logit_s = self.student(images)
 
+            # ===== PCA & GL Projectors (only when use_projection=True) =====
+            if self.use_projection:
+                pca_out = self.pca_projector(feat_map, Q_t, K_t, V_t)
+                PCAttn_s = pca_out["PCAttnS"]
+                V_s = pca_out["VS"]
+                h_s_proj = self.gl_projector(feat_map)  # [B, 196, 768]
+                l_proj1, l_proj2 = self.kd_loss_fn(Attn_t, PCAttn_s, V_t, V_s, h_t, h_s_proj)
+            else:
+                l_proj1 = torch.tensor(0.0, device=self.device)
+                l_proj2 = torch.tensor(0.0, device=self.device)
+
+            # ===== Calculate losses =====
+            ce_loss_s = self.ce_loss_fn(logit_s, labels)
             logits_kd_loss = self.logits_loss(logit_s, logit_t.detach())
             dist_loss = self.dist_loss_fn(logit_s, logit_t.detach())
             

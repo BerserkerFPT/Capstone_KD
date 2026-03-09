@@ -88,13 +88,12 @@ class LogitsKDLoss(nn.Module):
 
         return loss
 
-class TotalKDLoss(nn.Module):
+class ProjectionLoss(nn.Module):
     """
-    Total Knowledge Distillation Loss
+    Projection Loss (L_proj1 + L_proj2)
     
-    L_total = L_proj1 + L_proj2
-    
-    (Without discriminator: L_MVG is not included)
+    Combines PCA attention loss and Group-wise Linear loss.
+    Only used when use_projection=True.
     """
     def __init__(self):
         super().__init__()
@@ -119,42 +118,6 @@ class TotalKDLoss(nn.Module):
         l_proj2 = self.gwl_loss(h_t, h_s_proj)
         
         return l_proj1, l_proj2
-
-
-# ===== Test =====
-if __name__ == "__main__":
-    B = 2
-    
-    # Fake data
-    Attn_t = torch.randn(B, 196, 768)
-    PCAttn_s = torch.randn(B, 196, 768)
-    V_t = torch.randn(B, 196, 768)
-    V_s = torch.randn(B, 196, 768)
-    h_t = torch.randn(B, 196, 768)
-    h_s_proj = torch.randn(B, 196, 768)
-    
-    # Test PCA Loss
-    pca_loss_fn = PCALoss()
-    pca_loss = pca_loss_fn(Attn_t, PCAttn_s, V_t, V_s)
-    print(f"PCA Loss (L_proj1): {pca_loss.item():.4f}")
-    
-    # Test GWL Loss
-    gwl_loss_fn = GWLLoss()
-    gwl_loss = gwl_loss_fn(h_t, h_s_proj)
-    print(f"GWL Loss (L_proj2): {gwl_loss.item():.4f}")
-    
-    # Test Total Loss
-    total_loss_fn = TotalKDLoss()
-    total_loss, loss_dict = total_loss_fn(Attn_t, PCAttn_s, V_t, V_s, h_t, h_s_proj)
-    print(f"\nTotal Loss: {total_loss.item():.4f}")
-    print(f"Loss dict: {loss_dict}")
-
-    # Test DIST Loss
-    dist_loss_fn = DIST(beta=2.0, gamma=2.0, temperature=1.0)
-    z_s = torch.randn(B, 10) # 10 classes
-    z_t = torch.randn(B, 10)
-    dist_loss = dist_loss_fn(z_s, z_t)
-    print(f"DIST Loss: {dist_loss.item():.4f}")
 
 
 def cosine_similarity(a, b, eps=1e-8):
@@ -210,3 +173,38 @@ class DIST(nn.Module):
 
         loss = self.beta * inter_loss + self.gamma * intra_loss
         return loss
+
+
+# ===== Test =====
+if __name__ == "__main__":
+    B = 2
+
+    # Fake data
+    Attn_t = torch.randn(B, 196, 768)
+    PCAttn_s = torch.randn(B, 196, 768)
+    V_t = torch.randn(B, 196, 768)
+    V_s = torch.randn(B, 196, 768)
+    h_t = torch.randn(B, 196, 768)
+    h_s_proj = torch.randn(B, 196, 768)
+
+    # Test PCA Loss
+    pca_loss_fn = PCALoss()
+    pca_loss = pca_loss_fn(Attn_t, PCAttn_s, V_t, V_s)
+    print(f"PCA Loss (L_proj1): {pca_loss.item():.4f}")
+
+    # Test GWL Loss
+    gwl_loss_fn = GWLLoss()
+    gwl_loss = gwl_loss_fn(h_t, h_s_proj)
+    print(f"GWL Loss (L_proj2): {gwl_loss.item():.4f}")
+
+    # Test Projection Loss
+    proj_loss_fn = ProjectionLoss()
+    l_proj1, l_proj2 = proj_loss_fn(Attn_t, PCAttn_s, V_t, V_s, h_t, h_s_proj)
+    print(f"\nL_proj1: {l_proj1.item():.4f}, L_proj2: {l_proj2.item():.4f}")
+
+    # Test DIST Loss
+    dist_loss_fn = DIST(beta=2.0, gamma=2.0, temperature=1.0)
+    z_s = torch.randn(B, 10)
+    z_t = torch.randn(B, 10)
+    dist_loss = dist_loss_fn(z_s, z_t)
+    print(f"DIST Loss: {dist_loss.item():.4f}")
