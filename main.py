@@ -238,7 +238,8 @@ def main():
                 num_classes,
                 device,
                 class_names=class_names,
-                train_labels=train_labels
+                train_labels=train_labels,
+                save_dir=run_folder
             )
             print(f"  ✓ Training completed for {model_name}")
             

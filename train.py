@@ -4,6 +4,7 @@ Training script with early stopping and checkpoint saving
 import os
 import time
 import json
+import csv
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -239,7 +240,7 @@ def validate(model, val_loader, criterion, device):
     return epoch_loss, epoch_acc
 
 
-def train_model(model_name, train_loader, val_loader, num_classes, device, class_names=None, test_loader=None, train_labels=None):
+def train_model(model_name, train_loader, val_loader, num_classes, device, class_names=None, test_loader=None, train_labels=None, save_dir=None):
     """
     Train a single model
 
@@ -252,6 +253,7 @@ def train_model(model_name, train_loader, val_loader, num_classes, device, class
         class_names: List of class names (optional, for visualization)
         test_loader: Test dataloader (optional, for final test evaluation)
         train_labels: List of training labels (optional, for computing class weights)
+        save_dir: Directory to save training curves (per-run folder). If None, uses Config.RESULTS_DIR
 
     Returns:
         checkpoint_manager: CheckpointManager object
@@ -390,7 +392,8 @@ def train_model(model_name, train_loader, val_loader, num_classes, device, class
         'train_loss': [],
         'train_acc': [],
         'val_loss': [],
-        'val_acc': []
+        'val_acc': [],
+        'learning_rate': []
     }
     
     # Training loop
@@ -408,6 +411,7 @@ def train_model(model_name, train_loader, val_loader, num_classes, device, class
         history['train_acc'].append(train_acc)
         history['val_loss'].append(val_loss)
         history['val_acc'].append(val_acc)
+        history['learning_rate'].append(optimizer.param_groups[0]['lr'])
         
         epoch_time = time.time() - epoch_start_time
         
@@ -494,16 +498,37 @@ def train_model(model_name, train_loader, val_loader, num_classes, device, class
         wandb.finish()
         print(f"✓ W&B run finished")
     
-    # Generate training plots
-    viz_dir = os.path.join(Config.RESULTS_DIR, "visualizations")
-    os.makedirs(viz_dir, exist_ok=True)
+    # Determine save directory for training curves
+    if save_dir is not None:
+        curves_dir = os.path.join(save_dir, model_name, "training_curves")
+    else:
+        curves_dir = os.path.join(Config.RESULTS_DIR, "training_curves")
+    os.makedirs(curves_dir, exist_ok=True)
     
+    # Save training history to CSV
+    history_csv_path = os.path.join(curves_dir, f"{model_name}_training_history.csv")
+    
+    with open(history_csv_path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['epoch', 'train_loss', 'train_acc', 'val_loss', 'val_acc', 'learning_rate'])
+        for i in range(len(history['train_loss'])):
+            writer.writerow([
+                i + 1,
+                history['train_loss'][i],
+                history['train_acc'][i],
+                history['val_loss'][i],
+                history['val_acc'][i],
+                history['learning_rate'][i]
+            ])
+    print(f"\n✓ Training history CSV saved to: {history_csv_path}")
+    
+    # Generate training plots
     # Plot full training history
-    history_plot_path = os.path.join(viz_dir, f"{model_name}_training_history.png")
+    history_plot_path = os.path.join(curves_dir, f"{model_name}_training_history.png")
     plot_training_history(history, model_name, save_path=history_plot_path)
     
     # Plot patience period (last N epochs)
-    patience_plot_path = os.path.join(viz_dir, f"{model_name}_patience_period.png")
+    patience_plot_path = os.path.join(curves_dir, f"{model_name}_patience_period.png")
     plot_patience_period(history, Config.EARLY_STOPPING_PATIENCE, model_name, save_path=patience_plot_path)
     
     return checkpoint_manager, history
