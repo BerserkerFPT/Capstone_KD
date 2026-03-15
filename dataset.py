@@ -7,7 +7,7 @@ from pathlib import Path
 from collections import defaultdict
 
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 from torchvision import transforms
 from PIL import Image
 
@@ -204,6 +204,22 @@ def create_dataloaders(train_paths, train_labels, val_paths, val_labels,
 
     # Create datasets
     train_dataset = ImageDataset(train_paths, train_labels, transform=get_transforms('train'))
+    # Compute class sample counts
+    class_sample_counts = torch.bincount(torch.tensor(train_labels))
+
+    # Compute class weights (inverse frequency)
+    weights = 1.0 / class_sample_counts.float()
+
+    # Assign weight to each sample
+    train_targets = torch.tensor(train_labels)
+    samples_weights = weights[train_targets]
+
+    # Create sampler
+    sampler = WeightedRandomSampler(
+    weights=samples_weights.double(),
+    num_samples=len(samples_weights),
+    replacement=True
+    )
     val_dataset = ImageDataset(val_paths, val_labels, transform=get_transforms('val'))
     test_dataset = ImageDataset(test_paths, test_labels, transform=get_transforms('test'))
 
@@ -218,7 +234,8 @@ def create_dataloaders(train_paths, train_labels, val_paths, val_labels,
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=True,
+        sampler=sampler,  # Use the weighted sampler
+        shuffle=False,  # No shuffle when using sampler
         num_workers=num_workers,
         pin_memory=use_cuda,  # Only use pin_memory with CUDA
         persistent_workers=True,  # Keep workers alive between epochs

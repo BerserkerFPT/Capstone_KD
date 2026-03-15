@@ -345,8 +345,7 @@ def train_model(model_name, train_loader, val_loader, num_classes, device, class
         #     dtype=torch.float32
         # ).to(device)
         # print(f"  Class weights: {class_weights.cpu().tolist()}")
-        criterion = nn.CrossEntropyLoss()
-        print(f"  Loss: CrossEntropyLoss (weighted)")
+        criterion = nn.CrossEntropyLoss(label_smoothing=Config.LABEL_SMOOTHING)
     optimizer = optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), 
                           lr=Config.LEARNING_RATE,
                           weight_decay=Config.WEIGHT_DECAY)  # L2 regularization
