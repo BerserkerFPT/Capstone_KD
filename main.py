@@ -9,7 +9,7 @@ from tqdm import tqdm
 import numpy as np
 import pandas as pd
 from sklearn.metrics import (classification_report, confusion_matrix,
-                            accuracy_score, precision_score, recall_score, 
+                            accuracy_score, precision_score, recall_score,
                             f1_score, roc_auc_score)
 
 # Import các module đã tạo
@@ -19,6 +19,7 @@ from PCA_projector import PCAttentionProjector
 from GWLinear_projector import GWLinearProjector
 from loss_functions import ProjectionLoss, LogitsKDLoss, DIST
 from dataset import DatasetHandler
+from visualization import plot_training_curves
 torch.use_deterministic_algorithms(True, warn_only=True)
 
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
@@ -649,16 +650,24 @@ class DistillationPipeline:
         start_epoch = 0
         best_val_loss = float('inf')  # Lower is better
         epochs_no_improve = 0  # Early stopping counter
-        
+
+        history = {
+            "train_loss": [],
+            "val_loss":   [],
+            "train_acc":  [],
+            "val_acc":    [],
+            "lr":         [],
+        }
+
         if resume_path and os.path.exists(resume_path):
             start_epoch, best_val_loss = self.load_checkpoint(resume_path)
             # start_epoch += 1
-        
+
         print("\n" + "="*60)
         print("🚀 Starting Training")
         print(f"   Early Stopping: patience = {self.patience}")
         print("="*60)
-        
+
         for epoch in range(start_epoch, self.epochs):
             # Train
             train_metrics = self.train_one_epoch(epoch)
@@ -669,11 +678,18 @@ class DistillationPipeline:
             # Get current LR (before step)
             current_lr_student = self.scheduler_student.get_last_lr()[0]
             # current_lr_teacher = self.scheduler_teacher.get_last_lr()[0]
-            
+
+            # Record history
+            history["train_loss"].append(train_metrics["loss"])
+            history["val_loss"].append(val_metrics["loss"])
+            history["train_acc"].append(train_metrics["accuracy"])
+            history["val_acc"].append(val_metrics["accuracy"])
+            history["lr"].append(current_lr_student)
+
             # Step scheduler (epoch-level)
             self.scheduler_student.step()
             # self.scheduler_teacher.step()
-            
+
             # Print epoch summary
             print(f"\n📊 Epoch {epoch+1}/{self.epochs} Summary (LR_S: {current_lr_student:.6f}")
             print(f"   Train - Loss: {train_metrics['loss']:.4f}, "
@@ -707,7 +723,10 @@ class DistillationPipeline:
         
         # Save checkpoint manager info
         self.checkpoint_manager.save_info()
-        
+
+        # ===== Plot learning curves =====
+        plot_training_curves(history, self.save_dir)
+
         # ===== Evaluate all 3 strategies =====
         all_results = self.evaluate_all_strategies()
         
