@@ -73,8 +73,8 @@ class Config:
     TEMPERATURE = 4.0
 
     # DIST loss hyper-params
-    DIST_BETA = 2.0
-    DIST_GAMMA = 2.0
+    DIST_BETA = 1.0
+    DIST_GAMMA = 1.0
 
     # ===================== Checkpoints & Evaluation =====================
     SAVE_DIR = "checkpoints"
