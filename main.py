@@ -19,10 +19,37 @@ from PCA_projector import PCAttentionProjector
 from GWLinear_projector import GWLinearProjector
 from loss_functions import ProjectionLoss, LogitsKDLoss, DIST
 from dataset import DatasetHandler
-from visualization import plot_training_curves
+from visualization import plot_training_curves, plot_dwa_curves
 torch.use_deterministic_algorithms(True, warn_only=True)
 
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+
+class DynamicWeightAveraging:
+    def __init__(self, num_tasks, temperature=2.0):
+        self.num_tasks = num_tasks
+        self.temperature = temperature
+        self.loss_history = []
+
+    def get_lambdas(self):
+        t = len(self.loss_history) + 1
+        if t <= 2:
+            return torch.ones(self.num_tasks, dtype=torch.float32)
+
+        L_t_minus_1 = self.loss_history[-1]
+        L_t_minus_2 = self.loss_history[-2]
+
+        w = L_t_minus_1 / (L_t_minus_2 + 1e-8)
+        lambdas = self.num_tasks * torch.nn.functional.softmax(w / self.temperature, dim=0)
+        return lambdas
+
+    def update_loss_history(self, epoch_losses):
+        if not isinstance(epoch_losses, torch.Tensor):
+            epoch_losses = torch.tensor(epoch_losses, dtype=torch.float32)
+        assert epoch_losses.size(0) == self.num_tasks
+        self.loss_history.append(epoch_losses.clone().detach())
+        if len(self.loss_history) > 2:
+            self.loss_history.pop(0)
+
 
 class StudentWithHead(nn.Module):
     """
@@ -434,8 +461,13 @@ class DistillationPipeline:
         
         return scheduler_student
     
-    def train_one_epoch(self, epoch):
+    def train_one_epoch(self, epoch, current_lambdas=None):
         """Train for one epoch"""
+        if current_lambdas is None:
+            # Fallback if someone calls it without DWA
+            current_lambdas = torch.tensor([self.lambda1, self.lambda2, self.lambda3, self.lambda4])
+        current_lambdas = current_lambdas.to(self.device)
+
         self.student.train()
         if self.use_projection:
             self.pca_projector.train()
@@ -489,8 +521,13 @@ class DistillationPipeline:
             dist_loss = self.dist_loss_fn(logit_s, logit_t.detach())
             
             # ===== TÍNH LOSS RIÊNG =====
-            # Loss cho STUDENT (KHÔNG có ce_loss_teacher!)(Offline learning)
-            loss_student = ce_loss_s + self.lambda1 * l_proj1 + self.lambda2 * l_proj2 + self.lambda3 * logits_kd_loss + self.lambda4 * dist_loss
+            # Loss cho STUDENT (DWA chỉ áp dụng cho 4 hàm KD auxiliary loss)
+            # current_lambdas: [proj1, proj2, logits, dist]
+            loss_student = (ce_loss_s +
+                            current_lambdas[0] * l_proj1 +
+                            current_lambdas[1] * l_proj2 +
+                            current_lambdas[2] * logits_kd_loss +
+                            current_lambdas[3] * dist_loss)
             # Loss cho TEACHER HEAD (chỉ CE)
             # loss_teacher = ce_loss_t
 
@@ -519,9 +556,11 @@ class DistillationPipeline:
             # Update progress bar
             pbar.set_postfix({
             "Loss_S": f"{loss_student.item():.3f}",
-            "KD": f"{(self.lambda1*l_proj1.item()+self.lambda2*l_proj2.item()+self.lambda3*logits_kd_loss.item()):.3f}",
-            "DIST": f"{(dist_loss.item()):.3f}",
-            "CE": f"{ce_loss_s.item():.3f}",
+            "CE": f"{(ce_loss_s).item():.3f}",
+            "Proj1": f"{(current_lambdas[0]*l_proj1).item():.3f}",
+            "Proj2": f"{(current_lambdas[1]*l_proj2).item():.3f}",
+            "Logits": f"{(current_lambdas[2]*logits_kd_loss).item():.3f}",
+            "DIST": f"{(current_lambdas[3]*dist_loss).item():.3f}",
             "Acc": f"{100.*correct/total:.1f}%",
             "LR": f"{self.scheduler_student.get_last_lr()[0]:.4e}",
         })
@@ -531,14 +570,23 @@ class DistillationPipeline:
         avg_ce_loss_s = total_ce_loss_s / len(self.train_loader)
         accuracy = 100. * correct / total
         
+        avg_raw_l1 = total_l1 / len(self.train_loader)
+        avg_raw_l2 = total_l2 / len(self.train_loader)
+        avg_raw_l3 = total_logits_loss / len(self.train_loader)
+        avg_raw_dist = total_dist_loss / len(self.train_loader)
+
         return {
             "loss": avg_loss,
             "kd_loss": avg_kd_loss,
             "ce_loss_s": avg_ce_loss_s,
-            "l1_weighted": (total_l1 / len(self.train_loader)) * self.lambda1,
-            "l2_weighted": (total_l2 / len(self.train_loader)) * self.lambda2,
-            "l3_weighted": (total_logits_loss / len(self.train_loader)) * self.lambda3,
-            "dist_weighted": (total_dist_loss / len(self.train_loader)) * self.lambda4,
+            "raw_l1": avg_raw_l1,
+            "raw_l2": avg_raw_l2,
+            "raw_l3": avg_raw_l3,
+            "raw_dist": avg_raw_dist,
+            "l1_weighted": avg_raw_l1 * current_lambdas[0].item(),
+            "l2_weighted": avg_raw_l2 * current_lambdas[1].item(),
+            "l3_weighted": avg_raw_l3 * current_lambdas[2].item(),
+            "dist_weighted": avg_raw_dist * current_lambdas[3].item(),
             "accuracy": accuracy
         }
     
@@ -683,12 +731,25 @@ class DistillationPipeline:
         best_val_loss = float('inf')  # Lower is better
         epochs_no_improve = 0  # Early stopping counter
 
+        # Khởi tạo DWA (chỉ áp dụng cho 4 tác vụ KD hỗ trợ)
+        dwa = DynamicWeightAveraging(num_tasks=4, temperature=2.0)
+
         history = {
             "train_loss": [],
             "val_loss":   [],
             "train_acc":  [],
             "val_acc":    [],
             "lr":         [],
+            "raw_ce":     [],
+            "raw_l1":     [],
+            "raw_l2":     [],
+            "raw_l3":     [],
+            "raw_dist":   [],
+            "lambda_ce":  [],
+            "lambda_l1":  [],
+            "lambda_l2":  [],
+            "lambda_l3":  [],
+            "lambda_dist":[]
         }
 
         if resume_path and os.path.exists(resume_path):
@@ -701,8 +762,21 @@ class DistillationPipeline:
         print("="*60)
 
         for epoch in range(start_epoch, self.epochs):
+            # Lấy lambda động cho epoch hiện tại
+            current_lambdas = dwa.get_lambdas()
+            print(f"\n[DWA] Epoch {epoch+1} lambdas: CE=1.0000 (Fixed), Proj1={current_lambdas[0].item():.4f}, Proj2={current_lambdas[1].item():.4f}, Logits={current_lambdas[2].item():.4f}, DIST={current_lambdas[3].item():.4f}")
+
             # Train
-            train_metrics = self.train_one_epoch(epoch)
+            train_metrics = self.train_one_epoch(epoch, current_lambdas)
+            
+            # Cập nhật lịch sử raw losses vào DWA để tinh chỉnh cho epoch sau
+            avg_losses_tensor = torch.tensor([
+                train_metrics["raw_l1"],
+                train_metrics["raw_l2"],
+                train_metrics["raw_l3"],
+                train_metrics["raw_dist"]
+            ])
+            dwa.update_loss_history(avg_losses_tensor)
             
             # Validate
             val_metrics = self.validate(self.val_loader, desc="Val")
@@ -717,6 +791,18 @@ class DistillationPipeline:
             history["train_acc"].append(train_metrics["accuracy"])
             history["val_acc"].append(val_metrics["accuracy"])
             history["lr"].append(current_lr_student)
+
+            history["raw_ce"].append(train_metrics["ce_loss_s"])
+            history["raw_l1"].append(train_metrics["raw_l1"])
+            history["raw_l2"].append(train_metrics["raw_l2"])
+            history["raw_l3"].append(train_metrics["raw_l3"])
+            history["raw_dist"].append(train_metrics["raw_dist"])
+
+            history["lambda_ce"].append(1.0)
+            history["lambda_l1"].append(current_lambdas[0].item())
+            history["lambda_l2"].append(current_lambdas[1].item())
+            history["lambda_l3"].append(current_lambdas[2].item())
+            history["lambda_dist"].append(current_lambdas[3].item())
 
             # Step scheduler (epoch-level)
             self.scheduler_student.step()
@@ -758,6 +844,7 @@ class DistillationPipeline:
 
         # ===== Plot learning curves =====
         plot_training_curves(history, self.save_dir)
+        plot_dwa_curves(history, self.save_dir)
 
         # ===== Evaluate all 3 strategies =====
         all_results = self.evaluate_all_strategies()
