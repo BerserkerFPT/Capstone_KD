@@ -465,7 +465,8 @@ class DistillationPipeline:
         """Train for one epoch"""
         if current_lambdas is None:
             # Fallback if someone calls it without DWA
-            current_lambdas = torch.tensor([self.lambda1, self.lambda2, self.lambda3, self.lambda4])
+            # Order: [CE, Proj1, Proj2, Logits, DIST]
+            current_lambdas = torch.tensor([1.0, self.lambda1, self.lambda2, self.lambda3, self.lambda4])
         current_lambdas = current_lambdas.to(self.device)
 
         self.student.train()
@@ -521,25 +522,18 @@ class DistillationPipeline:
             dist_loss = self.dist_loss_fn(logit_s, logit_t.detach())
             
             # ===== TÍNH LOSS RIÊNG =====
-            # Loss cho STUDENT (DWA chỉ áp dụng cho 4 hàm KD auxiliary loss)
-            # current_lambdas: [proj1, proj2, logits, dist]
-            loss_student = (ce_loss_s +
-                            current_lambdas[0] * l_proj1 +
-                            current_lambdas[1] * l_proj2 +
-                            current_lambdas[2] * logits_kd_loss +
-                            current_lambdas[3] * dist_loss)
-            # Loss cho TEACHER HEAD (chỉ CE)
-            # loss_teacher = ce_loss_t
+            # Loss cho STUDENT (DWA áp dụng cho tất cả 5 losses bao gồm CE)
+            # current_lambdas: [CE, Proj1, Proj2, Logits, DIST]
+            loss_student = (current_lambdas[0] * ce_loss_s +
+                            current_lambdas[1] * l_proj1 +
+                            current_lambdas[2] * l_proj2 +
+                            current_lambdas[3] * logits_kd_loss +
+                            current_lambdas[4] * dist_loss)
 
-            # ===== BACKWARD RIÊNG CHO STUDENT TRƯỚC =====
+            # ===== BACKWARD =====
             self.optimizer_student.zero_grad()
-            loss_student.backward()  # ← STUDENT TRƯỚC (thêm retain_graph=True)
+            loss_student.backward()
             self.optimizer_student.step()
-
-            # # ===== BACKWARD RIÊNG CHO TEACHER SAU =====
-            # self.optimizer_teacher.zero_grad()
-            # loss_teacher.backward()  # ← TEACHER SAU (bỏ retain_graph=True)
-            # self.optimizer_teacher.step()
 
             # ===== Metrics =====
             total_loss += loss_student.item()
@@ -556,11 +550,11 @@ class DistillationPipeline:
             # Update progress bar
             pbar.set_postfix({
             "Loss_S": f"{loss_student.item():.3f}",
-            "CE": f"{(ce_loss_s).item():.3f}",
-            "Proj1": f"{(current_lambdas[0]*l_proj1).item():.3f}",
-            "Proj2": f"{(current_lambdas[1]*l_proj2).item():.3f}",
-            "Logits": f"{(current_lambdas[2]*logits_kd_loss).item():.3f}",
-            "DIST": f"{(current_lambdas[3]*dist_loss).item():.3f}",
+            "CE": f"{(current_lambdas[0]*ce_loss_s).item():.3f}",
+            "Proj1": f"{(current_lambdas[1]*l_proj1).item():.3f}",
+            "Proj2": f"{(current_lambdas[2]*l_proj2).item():.3f}",
+            "Logits": f"{(current_lambdas[3]*logits_kd_loss).item():.3f}",
+            "DIST": f"{(current_lambdas[4]*dist_loss).item():.3f}",
             "Acc": f"{100.*correct/total:.1f}%",
             "LR": f"{self.scheduler_student.get_last_lr()[0]:.4e}",
         })
@@ -583,10 +577,11 @@ class DistillationPipeline:
             "raw_l2": avg_raw_l2,
             "raw_l3": avg_raw_l3,
             "raw_dist": avg_raw_dist,
-            "l1_weighted": avg_raw_l1 * current_lambdas[0].item(),
-            "l2_weighted": avg_raw_l2 * current_lambdas[1].item(),
-            "l3_weighted": avg_raw_l3 * current_lambdas[2].item(),
-            "dist_weighted": avg_raw_dist * current_lambdas[3].item(),
+            "ce_weighted": avg_ce_loss_s * current_lambdas[0].item(),
+            "l1_weighted": avg_raw_l1 * current_lambdas[1].item(),
+            "l2_weighted": avg_raw_l2 * current_lambdas[2].item(),
+            "l3_weighted": avg_raw_l3 * current_lambdas[3].item(),
+            "dist_weighted": avg_raw_dist * current_lambdas[4].item(),
             "accuracy": accuracy
         }
     
@@ -731,8 +726,8 @@ class DistillationPipeline:
         best_val_loss = float('inf')  # Lower is better
         epochs_no_improve = 0  # Early stopping counter
 
-        # Khởi tạo DWA (chỉ áp dụng cho 4 tác vụ KD hỗ trợ)
-        dwa = DynamicWeightAveraging(num_tasks=4, temperature=2.0)
+        # Khởi tạo DWA cho tất cả 5 losses (CE + 4 KD)
+        dwa = DynamicWeightAveraging(num_tasks=5, temperature=2.0)
 
         history = {
             "train_loss": [],
@@ -762,15 +757,16 @@ class DistillationPipeline:
         print("="*60)
 
         for epoch in range(start_epoch, self.epochs):
-            # Lấy lambda động cho epoch hiện tại
+            # Lấy lambda động cho epoch hiện tại (5 tasks: CE, Proj1, Proj2, Logits, DIST)
             current_lambdas = dwa.get_lambdas()
-            print(f"\n[DWA] Epoch {epoch+1} lambdas: CE=1.0000 (Fixed), Proj1={current_lambdas[0].item():.4f}, Proj2={current_lambdas[1].item():.4f}, Logits={current_lambdas[2].item():.4f}, DIST={current_lambdas[3].item():.4f}")
+            print(f"\n[DWA] Epoch {epoch+1} lambdas: CE={current_lambdas[0].item():.4f}, Proj1={current_lambdas[1].item():.4f}, Proj2={current_lambdas[2].item():.4f}, Logits={current_lambdas[3].item():.4f}, DIST={current_lambdas[4].item():.4f}")
 
             # Train
             train_metrics = self.train_one_epoch(epoch, current_lambdas)
             
-            # Cập nhật lịch sử raw losses vào DWA để tinh chỉnh cho epoch sau
+            # Cập nhật lịch sử raw losses vào DWA (5 losses bao gồm CE)
             avg_losses_tensor = torch.tensor([
+                train_metrics["ce_loss_s"],
                 train_metrics["raw_l1"],
                 train_metrics["raw_l2"],
                 train_metrics["raw_l3"],
@@ -798,28 +794,27 @@ class DistillationPipeline:
             history["raw_l3"].append(train_metrics["raw_l3"])
             history["raw_dist"].append(train_metrics["raw_dist"])
 
-            history["lambda_ce"].append(1.0)
-            history["lambda_l1"].append(current_lambdas[0].item())
-            history["lambda_l2"].append(current_lambdas[1].item())
-            history["lambda_l3"].append(current_lambdas[2].item())
-            history["lambda_dist"].append(current_lambdas[3].item())
+            history["lambda_ce"].append(current_lambdas[0].item())
+            history["lambda_l1"].append(current_lambdas[1].item())
+            history["lambda_l2"].append(current_lambdas[2].item())
+            history["lambda_l3"].append(current_lambdas[3].item())
+            history["lambda_dist"].append(current_lambdas[4].item())
 
             # Step scheduler (epoch-level)
             self.scheduler_student.step()
             # self.scheduler_teacher.step()
 
             # Print epoch summary
-            print(f"\n📊 Epoch {epoch+1}/{self.epochs} Summary (LR_S: {current_lr_student:.6f}")
+            print(f"\n📊 Epoch {epoch+1}/{self.epochs} Summary (LR_S: {current_lr_student:.6f})")
             print(f"   Train - Loss: {train_metrics['loss']:.4f}, "
-                  f"KD: {train_metrics['l1_weighted']+train_metrics['l2_weighted']+train_metrics['l3_weighted']:.4f}, "
-                  f"DIST: {train_metrics['dist_weighted']:.4f}, " 
-                  f"CE: {train_metrics['ce_loss_s']:.4f}, "
+                  f"CE: {train_metrics['ce_weighted']:.4f}, "
+                  f"Proj1: {train_metrics['l1_weighted']:.4f}, "
+                  f"Proj2: {train_metrics['l2_weighted']:.4f}, "
+                  f"Logits: {train_metrics['l3_weighted']:.4f}, "
+                  f"DIST: {train_metrics['dist_weighted']:.4f}, "
                   f"Acc: {train_metrics['accuracy']:.2f}%")
             print(f"   Val   - Loss: {val_metrics['loss']:.4f}, "
                   f"Acc: {val_metrics['accuracy']:.2f}%")
-            print(f" L1 projection: {train_metrics['l1_weighted']:.4f}")
-            print(f" L2 projection: {train_metrics['l2_weighted']:.4f}")
-            print(f" Logits projection: {train_metrics['l3_weighted']:.4f}")
             # Save checkpoint (based on lowest val_loss)
             is_best = val_metrics["loss"] < best_val_loss
             if is_best:
