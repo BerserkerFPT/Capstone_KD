@@ -6,7 +6,7 @@ Modify all hyperparameters here instead of editing main.py directly.
 
 class Config:
     # ===================== Dataset =====================
-    DATA_DIR = r"/Capstone_KD_Testing_Ver1/kaggle/working/ProcessedOriginal"
+    DATA_DIR = r"/workspace/kaggle/working/ProcessedOriginal"
     NUM_CLASSES = 5
     IMAGE_SIZE = 224
     BATCH_SIZE = 256
@@ -24,7 +24,7 @@ class Config:
 
     # ===================== Teacher =====================
     TEACHER_CHECKPOINT = (
-        r"/strategy2_top_4_averaged.pth"
+        r"/Strategy_2_K2.pth"
     )
     # Transformer block indices for extracting features / QKV
     BLOCK_IDS = [0]
@@ -40,7 +40,7 @@ class Config:
     EMBED_DIM = 768                   # teacher ViT embed dim (also projector output dim)
 
     # -- PCAttentionProjector --
-    PCA_DROPOUT = 0.5                 # dropout for Conv2d layers in PCA projector
+    PCA_DROPOUT = 0.2             # dropout for Conv2d layers in PCA projector
     PCA_PARTIAL_P = 0.5              # probability of replacing student Q/K/V with teacher's
 
     # -- GWLinearProjector --
@@ -69,7 +69,20 @@ class Config:
     # Ablation study: set False to disable PCA/GL projectors (CE + Logits / CE + Logits + Relation)
     USE_PROJECTION = True
 
-    # Hinton KD temperature
+    # ===================== Ablation: Enable/Disable Individual Losses =====================
+    # Set any flag to False to remove that loss from training.
+    # DWA will automatically adjust to the active losses.
+    USE_CE     = True   # Cross-Entropy loss (classification, should almost always be True)
+    USE_PROJ1  = True   # L_proj1 — PCA Attention projection loss
+    USE_PROJ2  = True   # L_proj2 — GWLinear projection loss
+    USE_LOGITS = True   # L_logits — Hinton KD logits loss
+    USE_DIST   = True   # L_dist  — DIST relational loss
+
+    # ===================== DWA Hyperparameters =====================
+    # Temperature T for DWA softmax (higher T → more uniform weights)
+    DWA_TEMPERATURE = 2.5
+
+    # Hinton KD temperature (for logits distillation)
     TEMPERATURE = 4.0
 
     # DIST loss hyper-params
@@ -93,6 +106,14 @@ class Config:
     @classmethod
     def to_pipeline_dict(cls):
         """Return a dict that can be unpacked into DistillationPipeline(**config)."""
+        # Auto-compute DWA num_tasks from active losses
+        dwa_num_tasks = sum([
+            cls.USE_CE,
+            cls.USE_PROJ1 and cls.USE_PROJECTION,
+            cls.USE_PROJ2 and cls.USE_PROJECTION,
+            cls.USE_LOGITS,
+            cls.USE_DIST,
+        ])
         return {
             "data_dir": cls.DATA_DIR,
             "num_classes": cls.NUM_CLASSES,
@@ -127,6 +148,15 @@ class Config:
             "gw_drop_p": cls.GW_DROP_P,
             "label_smoothing": cls.LABEL_SMOOTHING,
             "use_projection": cls.USE_PROJECTION,
+            # Ablation: individual loss flags
+            "use_ce":     cls.USE_CE,
+            "use_proj1":  cls.USE_PROJ1,
+            "use_proj2":  cls.USE_PROJ2,
+            "use_logits": cls.USE_LOGITS,
+            "use_dist":   cls.USE_DIST,
+            # DWA hyperparams
+            "dwa_temperature": cls.DWA_TEMPERATURE,
+            "dwa_num_tasks":   dwa_num_tasks,
         }
 
     @classmethod
