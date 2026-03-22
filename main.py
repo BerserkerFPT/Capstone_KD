@@ -37,8 +37,9 @@ class DynamicWeightAveraging:
 
         L_t_minus_1 = self.loss_history[-1]
         L_t_minus_2 = self.loss_history[-2]
-
+        
         w = L_t_minus_1 / (L_t_minus_2 + 1e-8)
+        w = (w - w.mean()) / (w.std() + 1e-8)
         lambdas = self.num_tasks * torch.nn.functional.softmax(w / self.temperature, dim=0)
         return lambdas
 
@@ -290,6 +291,15 @@ class DistillationPipeline:
         gw_drop_p=0.4,
         label_smoothing=0.1,
         use_projection=True,  # ablation: set False to skip PCA/GL projectors
+        # --- Ablation: individual loss flags ---
+        use_ce=True,      # Cross-Entropy loss
+        use_proj1=True,   # L_proj1 PCA projection loss
+        use_proj2=True,   # L_proj2 GWLinear projection loss
+        use_logits=True,  # L_logits Hinton KD logits loss
+        use_dist=True,    # L_dist DIST relational loss
+        # --- DWA hyperparameters ---
+        dwa_temperature=2.0,   # Temperature T for DWA softmax
+        dwa_num_tasks=5,       # Auto-computed from active losses in Config
     ):
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         self.epochs = epochs
@@ -308,6 +318,17 @@ class DistillationPipeline:
         self.dist_beta = dist_beta
         self.dist_gamma = dist_gamma
         self.use_projection = use_projection
+        # --- Ablation flags ---
+        self.use_ce     = use_ce
+        self.use_proj1  = use_proj1 and use_projection  # proj1 requires use_projection
+        self.use_proj2  = use_proj2 and use_projection  # proj2 requires use_projection
+        self.use_logits = use_logits
+        self.use_dist   = use_dist
+        # --- DWA hyperparameters ---
+        self.dwa_temperature = dwa_temperature
+        self.dwa_num_tasks   = dwa_num_tasks
+        if not self.use_ce:
+            print("\u26a0\ufe0f  WARNING: USE_CE=False. CE loss is disabled — classification may fail!")
         # self.eta_min_teacher = eta_min_teacher,
         os.makedirs(save_dir, exist_ok=True)
         
@@ -408,7 +429,89 @@ class DistillationPipeline:
         )
         
         print(f"\n✅ Pipeline initialized on {self.device}")
+
+        # ===== Export config to Excel =====
+        self._export_config_to_excel()
     
+    def _export_config_to_excel(self):
+        """
+        Xuất toàn bộ hyperparameters và config của run hiện tại
+        ra file Excel (config_run_<N>.xlsx) trong self.save_dir.
+
+        Gồm 2 sheet:
+          - "Config"         : tất cả hyperparameters
+          - "Ablation Flags" : các flag bật/tắt loss
+        """
+        import datetime
+
+        run_name = os.path.basename(self.save_dir)   # e.g. "run_3"
+        excel_path = os.path.join(self.save_dir, f"config_{run_name}.xlsx")
+
+        # ── Sheet 1: all hyperparameters ─────────────────────────────
+        config_rows = [
+            # ── Dataset ──
+            {"Group": "Dataset",   "Parameter": "data_dir",              "Value": getattr(self.data_handler, 'root_dir', 'N/A')},
+            {"Group": "Dataset",   "Parameter": "num_classes",           "Value": self.num_classes},
+            {"Group": "Dataset",   "Parameter": "batch_size",            "Value": self.data_handler.batch_size
+                                                                                   if hasattr(self.data_handler, 'batch_size') else 'N/A'},
+            # ── Training ──
+            {"Group": "Training",  "Parameter": "epochs",               "Value": self.epochs},
+            {"Group": "Training",  "Parameter": "lr_student",           "Value": self.optimizer_student.param_groups[0]['lr']},
+            {"Group": "Training",  "Parameter": "warmup_epochs_student","Value": self.warmup_epochs_student},
+            {"Group": "Training",  "Parameter": "start_factor_student", "Value": self.start_factor_student},
+            {"Group": "Training",  "Parameter": "eta_min_student",      "Value": self.eta_min_student},
+            {"Group": "Training",  "Parameter": "patience",             "Value": self.patience},
+            {"Group": "Training",  "Parameter": "label_smoothing",      "Value": self.label_smoothing},
+            # ── Loss weights (initial λ) ──
+            {"Group": "Loss Weights", "Parameter": "lambda1 (L_proj1)", "Value": self.lambda1},
+            {"Group": "Loss Weights", "Parameter": "lambda2 (L_proj2)", "Value": self.lambda2},
+            {"Group": "Loss Weights", "Parameter": "lambda3 (L_logits)","Value": self.lambda3},
+            {"Group": "Loss Weights", "Parameter": "lambda4 (L_dist)",  "Value": self.lambda4},
+            # ── DWA ──
+            {"Group": "DWA",       "Parameter": "dwa_temperature",      "Value": self.dwa_temperature},
+            {"Group": "DWA",       "Parameter": "dwa_num_tasks",        "Value": self.dwa_num_tasks},
+            # ── Logits KD ──
+            {"Group": "KD",        "Parameter": "temperature (Hinton)", "Value": self.temperature},
+            # ── DIST ──
+            {"Group": "DIST",      "Parameter": "dist_beta",            "Value": self.dist_beta},
+            {"Group": "DIST",      "Parameter": "dist_gamma",           "Value": self.dist_gamma},
+            # ── Projectors ──
+            {"Group": "Projector", "Parameter": "use_projection",       "Value": self.use_projection},
+            {"Group": "Projector", "Parameter": "pca_dropout",          "Value": self.pca_dropout},
+            {"Group": "Projector", "Parameter": "pca_partial_p",        "Value": self.pca_partial_p},
+            {"Group": "Projector", "Parameter": "gw_drop_p",            "Value": self.gw_drop_p},
+            # ── Student ──
+            {"Group": "Student",   "Parameter": "fc_dropout",           "Value": self.student_fc_dropout},
+            {"Group": "Student",   "Parameter": "fc_hidden",            "Value": str(self.student_fc_hidden)},
+            # ── Checkpoint ──
+            {"Group": "Checkpoint","Parameter": "save_dir",             "Value": self.save_dir},
+            {"Group": "Checkpoint","Parameter": "keep_last_n",          "Value": self.checkpoint_manager.keep_last_n},
+            {"Group": "Checkpoint","Parameter": "keep_top_k",           "Value": self.checkpoint_manager.keep_top_k},
+            {"Group": "Checkpoint","Parameter": "last_n_epochs",        "Value": self.last_n_epochs},
+            # ── Meta ──
+            {"Group": "Meta",      "Parameter": "device",               "Value": str(self.device)},
+            {"Group": "Meta",      "Parameter": "timestamp",            "Value": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
+            {"Group": "Meta",      "Parameter": "run",                  "Value": run_name},
+        ]
+
+        # ── Sheet 2: ablation flags ───────────────────────────────────
+        ablation_rows = [
+            {"Loss": "CE",     "Flag": "use_ce",     "Enabled": self.use_ce},
+            {"Loss": "Proj1",  "Flag": "use_proj1",  "Enabled": self.use_proj1},
+            {"Loss": "Proj2",  "Flag": "use_proj2",  "Enabled": self.use_proj2},
+            {"Loss": "Logits", "Flag": "use_logits", "Enabled": self.use_logits},
+            {"Loss": "DIST",   "Flag": "use_dist",   "Enabled": self.use_dist},
+        ]
+
+        df_config   = pd.DataFrame(config_rows)
+        df_ablation = pd.DataFrame(ablation_rows)
+
+        with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
+            df_config.to_excel(writer,   sheet_name="Config",         index=False)
+            df_ablation.to_excel(writer, sheet_name="Ablation Flags", index=False)
+
+        print(f"📋 Config exported to: {excel_path}")
+
     def _get_scheduler(self):
         """
         Linear warmup + Cosine annealing scheduler using SequentialLR (epoch-level)
@@ -462,18 +565,19 @@ class DistillationPipeline:
         return scheduler_student
     
     def train_one_epoch(self, epoch, current_lambdas=None):
-        """Train for one epoch"""
+        """Train for one epoch."""
+        # Build ordered list of active losses (same order DWA tracks them)
+        # Order: [CE?, Proj1?, Proj2?, Logits?, DIST?]
         if current_lambdas is None:
-            # Fallback if someone calls it without DWA
-            # Order: [CE, Proj1, Proj2, Logits, DIST]
-            current_lambdas = torch.tensor([1.0, self.lambda1, self.lambda2, self.lambda3, self.lambda4])
+            # Fallback: equal weights for all active losses
+            current_lambdas = torch.ones(self.dwa_num_tasks)
         current_lambdas = current_lambdas.to(self.device)
 
         self.student.train()
         if self.use_projection:
             self.pca_projector.train()
             self.gl_projector.train()
-        # self.teacher_head.train()  # ← Teacher head cũng train!
+
         total_loss = 0.0
         total_kd_loss = 0.0
         total_logits_loss = 0.0
@@ -481,7 +585,6 @@ class DistillationPipeline:
         total_l1 = 0.0
         total_l2 = 0.0
         total_dist_loss = 0.0
-        # total_ce_loss_t = 0.0
         correct = 0
         total = 0
         
@@ -505,32 +608,49 @@ class DistillationPipeline:
             # ===== Student forward =====
             feat_map, logit_s = self.student(images)
 
-            # ===== PCA & GL Projectors (only when use_projection=True) =====
+            # ===== PCA & GL Projectors =====
             if self.use_projection:
                 pca_out = self.pca_projector(feat_map, Q_t, K_t, V_t)
                 PCAttn_s = pca_out["PCAttnS"]
                 V_s = pca_out["VS"]
-                h_s_proj = self.gl_projector(feat_map)  # [B, 196, 768]
+                h_s_proj = self.gl_projector(feat_map)
                 l_proj1, l_proj2 = self.kd_loss_fn(Attn_t, PCAttn_s, V_t, V_s, h_t, h_s_proj)
             else:
                 l_proj1 = torch.tensor(0.0, device=self.device)
                 l_proj2 = torch.tensor(0.0, device=self.device)
 
-            # ===== Calculate losses =====
-            ce_loss_s = self.ce_loss_fn(logit_s, labels)
+            # ===== Compute individual losses =====
+            ce_loss_s      = self.ce_loss_fn(logit_s, labels)
             logits_kd_loss = self.logits_loss(logit_s, logit_t.detach())
-            dist_loss = self.dist_loss_fn(logit_s, logit_t.detach())
+            dist_loss      = self.dist_loss_fn(logit_s, logit_t.detach())
             
-            # ===== TÍNH LOSS RIÊNG =====
-            # Loss cho STUDENT (DWA áp dụng cho tất cả 5 losses bao gồm CE)
-            # current_lambdas: [CE, Proj1, Proj2, Logits, DIST]
-            loss_student = (current_lambdas[0] * ce_loss_s +
-                            current_lambdas[1] * l_proj1 +
-                            current_lambdas[2] * l_proj2 +
-                            current_lambdas[3] * logits_kd_loss +
-                            current_lambdas[4] * dist_loss)
+            # ===== Build total loss dynamically (ablation-aware) =====
+            # current_lambdas is indexed in activation order: only active losses
+            # are given a DWA slot. We iterate the active flags to assign λ_i.
+            loss_student = torch.tensor(0.0, device=self.device)
+            lam_idx = 0
 
-            # ===== BACKWARD =====
+            if self.use_ce:
+                loss_student = loss_student + current_lambdas[lam_idx] * ce_loss_s
+                lam_idx += 1
+
+            if self.use_proj1:
+                loss_student = loss_student + current_lambdas[lam_idx] * l_proj1
+                lam_idx += 1
+
+            if self.use_proj2:
+                loss_student = loss_student + current_lambdas[lam_idx] * l_proj2
+                lam_idx += 1
+
+            if self.use_logits:
+                loss_student = loss_student + current_lambdas[lam_idx] * logits_kd_loss
+                lam_idx += 1
+
+            if self.use_dist:
+                loss_student = loss_student + current_lambdas[lam_idx] * dist_loss
+                # lam_idx += 1  # no need to increment after last
+
+            # ===== Backward =====
             self.optimizer_student.zero_grad()
             loss_student.backward()
             self.optimizer_student.step()
@@ -546,44 +666,60 @@ class DistillationPipeline:
             _, predicted = logit_s.max(1)
             total += labels.size(0)
             correct += predicted.eq(labels).sum().item()
-            
-            # Update progress bar
+
+            # Rebuild lam_idx for postfix display
+            _idx = 0
+            _lce  = (current_lambdas[_idx].item() if self.use_ce     else 0.0); _idx += int(self.use_ce)
+            _lp1  = (current_lambdas[_idx].item() if self.use_proj1  else 0.0); _idx += int(self.use_proj1)
+            _lp2  = (current_lambdas[_idx].item() if self.use_proj2  else 0.0); _idx += int(self.use_proj2)
+            _llg  = (current_lambdas[_idx].item() if self.use_logits else 0.0); _idx += int(self.use_logits)
+            _lds  = (current_lambdas[_idx].item() if self.use_dist   else 0.0)
             pbar.set_postfix({
-            "Loss_S": f"{loss_student.item():.3f}",
-            "CE": f"{(current_lambdas[0]*ce_loss_s).item():.3f}",
-            "Proj1": f"{(current_lambdas[1]*l_proj1).item():.3f}",
-            "Proj2": f"{(current_lambdas[2]*l_proj2).item():.3f}",
-            "Logits": f"{(current_lambdas[3]*logits_kd_loss).item():.3f}",
-            "DIST": f"{(current_lambdas[4]*dist_loss).item():.3f}",
-            "Acc": f"{100.*correct/total:.1f}%",
-            "LR": f"{self.scheduler_student.get_last_lr()[0]:.4e}",
-        })
+                "Loss": f"{loss_student.item():.3f}",
+                "CE":    f"{_lce  * ce_loss_s.item():.3f}" if self.use_ce     else "OFF",
+                "Proj1": f"{_lp1  * l_proj1.item():.3f}"  if self.use_proj1  else "OFF",
+                "Proj2": f"{_lp2  * l_proj2.item():.3f}"  if self.use_proj2  else "OFF",
+                "Logits":f"{_llg  * logits_kd_loss.item():.3f}" if self.use_logits else "OFF",
+                "DIST":  f"{_lds  * dist_loss.item():.3f}" if self.use_dist   else "OFF",
+                "Acc":   f"{100.*correct/total:.1f}%",
+                "LR":    f"{self.scheduler_student.get_last_lr()[0]:.4e}",
+            })
         
-        avg_loss = total_loss / len(self.train_loader)
-        avg_kd_loss = total_kd_loss / len(self.train_loader)
-        avg_ce_loss_s = total_ce_loss_s / len(self.train_loader)
-        accuracy = 100. * correct / total
-        
-        avg_raw_l1 = total_l1 / len(self.train_loader)
-        avg_raw_l2 = total_l2 / len(self.train_loader)
-        avg_raw_l3 = total_logits_loss / len(self.train_loader)
-        avg_raw_dist = total_dist_loss / len(self.train_loader)
+        n_batches = len(self.train_loader)
+        avg_loss      = total_loss      / n_batches
+        avg_kd_loss   = total_kd_loss   / n_batches
+        avg_ce_loss_s = total_ce_loss_s / n_batches
+        accuracy      = 100. * correct / total
+        avg_raw_l1    = total_l1           / n_batches
+        avg_raw_l2    = total_l2           / n_batches
+        avg_raw_l3    = total_logits_loss  / n_batches
+        avg_raw_dist  = total_dist_loss    / n_batches
+
+        # Rebuild λ* for weighted metrics
+        _idx = 0
+        _lce  = (_lam := current_lambdas[_idx].item() if self.use_ce     else 0.0); _idx += int(self.use_ce)
+        _lp1  = (current_lambdas[_idx].item() if self.use_proj1  else 0.0); _idx += int(self.use_proj1)
+        _lp2  = (current_lambdas[_idx].item() if self.use_proj2  else 0.0); _idx += int(self.use_proj2)
+        _llg  = (current_lambdas[_idx].item() if self.use_logits else 0.0); _idx += int(self.use_logits)
+        _lds  = (current_lambdas[_idx].item() if self.use_dist   else 0.0)
 
         return {
-            "loss": avg_loss,
-            "kd_loss": avg_kd_loss,
-            "ce_loss_s": avg_ce_loss_s,
-            "raw_l1": avg_raw_l1,
-            "raw_l2": avg_raw_l2,
-            "raw_l3": avg_raw_l3,
-            "raw_dist": avg_raw_dist,
-            "ce_weighted": avg_ce_loss_s * current_lambdas[0].item(),
-            "l1_weighted": avg_raw_l1 * current_lambdas[1].item(),
-            "l2_weighted": avg_raw_l2 * current_lambdas[2].item(),
-            "l3_weighted": avg_raw_l3 * current_lambdas[3].item(),
-            "dist_weighted": avg_raw_dist * current_lambdas[4].item(),
-            "accuracy": accuracy
+            "loss":         avg_loss,
+            "kd_loss":      avg_kd_loss,
+            "ce_loss_s":    avg_ce_loss_s,
+            "raw_l1":       avg_raw_l1,
+            "raw_l2":       avg_raw_l2,
+            "raw_l3":       avg_raw_l3,
+            "raw_dist":     avg_raw_dist,
+            "ce_weighted":  avg_ce_loss_s * _lce,
+            "l1_weighted":  avg_raw_l1    * _lp1,
+            "l2_weighted":  avg_raw_l2    * _lp2,
+            "l3_weighted":  avg_raw_l3    * _llg,
+            "dist_weighted":avg_raw_dist  * _lds,
+            "accuracy":     accuracy,
+            "lambda_vals":  current_lambdas.cpu().tolist(),  # raw DWA lambdas
         }
+    
     
     @torch.no_grad()
     def validate(self, loader, desc="Val", class_names=None):
@@ -726,8 +862,12 @@ class DistillationPipeline:
         best_val_loss = float('inf')  # Lower is better
         epochs_no_improve = 0  # Early stopping counter
 
-        # Khởi tạo DWA cho tất cả 5 losses (CE + 4 KD)
-        dwa = DynamicWeightAveraging(num_tasks=5, temperature=2.0)
+        # Khởi tạo DWA với num_tasks và temperature từ config
+        # (dwa_num_tasks được auto-tính từ các USE_* flags trong Config)
+        dwa = DynamicWeightAveraging(
+            num_tasks=self.dwa_num_tasks,
+            temperature=self.dwa_temperature
+        )
 
         history = {
             "train_loss": [],
@@ -757,22 +897,30 @@ class DistillationPipeline:
         print("="*60)
 
         for epoch in range(start_epoch, self.epochs):
-            # Lấy lambda động cho epoch hiện tại (5 tasks: CE, Proj1, Proj2, Logits, DIST)
+            # Lấy lambda động cho epoch hiện tại
             current_lambdas = dwa.get_lambdas()
-            print(f"\n[DWA] Epoch {epoch+1} lambdas: CE={current_lambdas[0].item():.4f}, Proj1={current_lambdas[1].item():.4f}, Proj2={current_lambdas[2].item():.4f}, Logits={current_lambdas[3].item():.4f}, DIST={current_lambdas[4].item():.4f}")
+
+            # Log DWA lambdas theo active losses
+            active_names  = (["CE"]     if self.use_ce     else []) + \
+                            (["Proj1"]  if self.use_proj1  else []) + \
+                            (["Proj2"]  if self.use_proj2  else []) + \
+                            (["Logits"] if self.use_logits else []) + \
+                            (["DIST"]   if self.use_dist   else [])
+            lam_str = ", ".join(f"{n}={current_lambdas[i].item():.4f}"
+                                for i, n in enumerate(active_names))
+            print(f"\n[DWA] Epoch {epoch+1} lambdas: {lam_str}")
 
             # Train
             train_metrics = self.train_one_epoch(epoch, current_lambdas)
             
-            # Cập nhật lịch sử raw losses vào DWA (5 losses bao gồm CE)
-            avg_losses_tensor = torch.tensor([
-                train_metrics["ce_loss_s"],
-                train_metrics["raw_l1"],
-                train_metrics["raw_l2"],
-                train_metrics["raw_l3"],
-                train_metrics["raw_dist"]
-            ])
-            dwa.update_loss_history(avg_losses_tensor)
+            # Cập nhật DWA: chỉ đưa losses của các tasks đang active
+            active_losses = []
+            if self.use_ce:     active_losses.append(train_metrics["ce_loss_s"])
+            if self.use_proj1:  active_losses.append(train_metrics["raw_l1"])
+            if self.use_proj2:  active_losses.append(train_metrics["raw_l2"])
+            if self.use_logits: active_losses.append(train_metrics["raw_l3"])
+            if self.use_dist:   active_losses.append(train_metrics["raw_dist"])
+            dwa.update_loss_history(torch.tensor(active_losses))
             
             # Validate
             val_metrics = self.validate(self.val_loader, desc="Val")
@@ -794,11 +942,17 @@ class DistillationPipeline:
             history["raw_l3"].append(train_metrics["raw_l3"])
             history["raw_dist"].append(train_metrics["raw_dist"])
 
-            history["lambda_ce"].append(current_lambdas[0].item())
-            history["lambda_l1"].append(current_lambdas[1].item())
-            history["lambda_l2"].append(current_lambdas[2].item())
-            history["lambda_l3"].append(current_lambdas[3].item())
-            history["lambda_dist"].append(current_lambdas[4].item())
+            # Lambda history: map DWA slots → fixed 5-key history
+            lam_idx = 0
+            history["lambda_ce"].append(current_lambdas[lam_idx].item() if self.use_ce else 0.0)
+            lam_idx += int(self.use_ce)
+            history["lambda_l1"].append(current_lambdas[lam_idx].item() if self.use_proj1 else 0.0)
+            lam_idx += int(self.use_proj1)
+            history["lambda_l2"].append(current_lambdas[lam_idx].item() if self.use_proj2 else 0.0)
+            lam_idx += int(self.use_proj2)
+            history["lambda_l3"].append(current_lambdas[lam_idx].item() if self.use_logits else 0.0)
+            lam_idx += int(self.use_logits)
+            history["lambda_dist"].append(current_lambdas[lam_idx].item() if self.use_dist else 0.0)
 
             # Step scheduler (epoch-level)
             self.scheduler_student.step()
