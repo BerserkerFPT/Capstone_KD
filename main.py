@@ -39,7 +39,6 @@ class DynamicWeightAveraging:
         L_t_minus_2 = self.loss_history[-2]
         
         w = L_t_minus_1 / (L_t_minus_2 + 1e-8)
-        w = (w - w.mean()) / (w.std() + 1e-8)
         lambdas = self.num_tasks * torch.nn.functional.softmax(w / self.temperature, dim=0)
         return lambdas
 
