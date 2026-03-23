@@ -17,7 +17,7 @@ from Teacher_extraction import TeacherExtractor
 from Student_extraction import StudentExtractor
 from PCA_projector import PCAttentionProjector
 from GWLinear_projector import GWLinearProjector
-from loss_functions import ProjectionLoss, LogitsKDLoss, DIST
+from loss_functions import ProjectionLoss, LogitsKDLoss, DIST, PolyFocalLoss, compute_class_weights
 from dataset import DatasetHandler
 from visualization import plot_training_curves, plot_dwa_curves
 torch.use_deterministic_algorithms(True, warn_only=True)
@@ -25,14 +25,17 @@ torch.use_deterministic_algorithms(True, warn_only=True)
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
 class DynamicWeightAveraging:
-    def __init__(self, num_tasks, temperature=2.0):
+    def __init__(self, num_tasks, temperature=2.0, initial_lambdas=None):
         self.num_tasks = num_tasks
         self.temperature = temperature
         self.loss_history = []
+        self.initial_lambdas = initial_lambdas  # Custom weights for first 2 epochs
 
     def get_lambdas(self):
         t = len(self.loss_history) + 1
         if t <= 2:
+            if self.initial_lambdas is not None:
+                return self.initial_lambdas.clone()
             return torch.ones(self.num_tasks, dtype=torch.float32)
 
         L_t_minus_1 = self.loss_history[-1]
@@ -265,10 +268,7 @@ class DistillationPipeline:
         # warmup_epochs_teacher=5,
         device="cuda",
         save_dir="checkpoints",
-        lambda1=1.0,  # weight for L_proj1 (PCA loss)
-        lambda2=1.0,  # weight for L_proj2 (GL loss)
-        lambda3=1.0,  # weight for L_logits (Hinton loss)
-        lambda4=1.0,  # weight for DIST loss
+        dwa_init_lambdas=None,  # list of 5 initial lambda values for DWA
         patience=15,  # early stopping patience
         start_factor_student=1e-8,
         # start_factor_teacher=1e-8,  # warmup start factor
@@ -299,16 +299,19 @@ class DistillationPipeline:
         # --- DWA hyperparameters ---
         dwa_temperature=2.0,   # Temperature T for DWA softmax
         dwa_num_tasks=5,       # Auto-computed from active losses in Config
+        # --- Weighted sampler & Focal loss ---
+        use_weighted_sampler=False,
+        use_focal_loss=False,
+        focal_gamma=2.0,
+        poly_epsilon=1.0,
+        class_weight_method='inverse_freq',
     ):
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         self.epochs = epochs
         self.warmup_epochs_student = warmup_epochs_student
         # self.warmup_epochs_teacher = warmup_epochs_teacher
         self.save_dir = save_dir
-        self.lambda1 = lambda1
-        self.lambda2 = lambda2
-        self.lambda3 = lambda3
-        self.lambda4 = lambda4
+        self.dwa_init_lambdas = dwa_init_lambdas
         self.temperature = temperature
         self.patience = patience
         self.start_factor_student = start_factor_student
@@ -326,6 +329,12 @@ class DistillationPipeline:
         # --- DWA hyperparameters ---
         self.dwa_temperature = dwa_temperature
         self.dwa_num_tasks   = dwa_num_tasks
+        # --- Weighted sampler & Focal loss ---
+        self.use_weighted_sampler = use_weighted_sampler
+        self.use_focal_loss = use_focal_loss
+        self.focal_gamma = focal_gamma
+        self.poly_epsilon = poly_epsilon
+        self.class_weight_method = class_weight_method
         if not self.use_ce:
             print("\u26a0\ufe0f  WARNING: USE_CE=False. CE loss is disabled — classification may fail!")
         # self.eta_min_teacher = eta_min_teacher,
@@ -344,7 +353,8 @@ class DistillationPipeline:
         self.data_handler = DatasetHandler(
             root_dir=data_dir,
             batch_size=batch_size,
-            num_workers=num_workers
+            num_workers=num_workers,
+            use_weighted_sampler=use_weighted_sampler
         )
         self.train_loader, self.val_loader, self.test_loader = self.data_handler.get_dataloaders()
         
@@ -402,7 +412,18 @@ class DistillationPipeline:
         # ===== Loss functions =====
         self.label_smoothing = label_smoothing
         self.kd_loss_fn = ProjectionLoss() if self.use_projection else None
-        self.ce_loss_fn = nn.CrossEntropyLoss(label_smoothing=self.label_smoothing)
+        if self.use_focal_loss:
+            # Compute class weights from training data
+            train_labels = self.data_handler.get_train_labels()
+            class_weights = compute_class_weights(train_labels, method=self.class_weight_method)
+            self.ce_loss_fn = PolyFocalLoss(
+                gamma=self.focal_gamma,
+                epsilon=self.poly_epsilon,
+                alpha=class_weights
+            )
+            print(f"\u2705 PolyFocalLoss enabled (gamma={self.focal_gamma}, epsilon={self.poly_epsilon}, method={self.class_weight_method})")
+        else:
+            self.ce_loss_fn = nn.CrossEntropyLoss(label_smoothing=self.label_smoothing)
         self.logits_loss = LogitsKDLoss(temperature=temperature)
         self.dist_loss_fn = DIST(beta=dist_beta, gamma=dist_gamma)
         # ===== Optimizer (chỉ train student + projectors nếu có) =====
@@ -462,10 +483,11 @@ class DistillationPipeline:
             {"Group": "Training",  "Parameter": "patience",             "Value": self.patience},
             {"Group": "Training",  "Parameter": "label_smoothing",      "Value": self.label_smoothing},
             # ── Loss weights (initial λ) ──
-            {"Group": "Loss Weights", "Parameter": "lambda1 (L_proj1)", "Value": self.lambda1},
-            {"Group": "Loss Weights", "Parameter": "lambda2 (L_proj2)", "Value": self.lambda2},
-            {"Group": "Loss Weights", "Parameter": "lambda3 (L_logits)","Value": self.lambda3},
-            {"Group": "Loss Weights", "Parameter": "lambda4 (L_dist)",  "Value": self.lambda4},
+            {"Group": "Loss Weights", "Parameter": "dwa_init_lambda_CE",     "Value": self.dwa_init_lambdas[0] if self.dwa_init_lambdas else 1.0},
+            {"Group": "Loss Weights", "Parameter": "dwa_init_lambda_Proj1",  "Value": self.dwa_init_lambdas[1] if self.dwa_init_lambdas else 1.0},
+            {"Group": "Loss Weights", "Parameter": "dwa_init_lambda_Proj2",  "Value": self.dwa_init_lambdas[2] if self.dwa_init_lambdas else 1.0},
+            {"Group": "Loss Weights", "Parameter": "dwa_init_lambda_Logits", "Value": self.dwa_init_lambdas[3] if self.dwa_init_lambdas else 1.0},
+            {"Group": "Loss Weights", "Parameter": "dwa_init_lambda_DIST",   "Value": self.dwa_init_lambdas[4] if self.dwa_init_lambdas else 1.0},
             # ── DWA ──
             {"Group": "DWA",       "Parameter": "dwa_temperature",      "Value": self.dwa_temperature},
             {"Group": "DWA",       "Parameter": "dwa_num_tasks",        "Value": self.dwa_num_tasks},
@@ -721,9 +743,16 @@ class DistillationPipeline:
     
     
     @torch.no_grad()
-    def validate(self, loader, desc="Val", class_names=None):
-        """Validate on given loader, optionally compute per-class metrics"""
+    def validate(self, loader, desc="Val", class_names=None, current_lambdas=None):
+        """Validate on given loader using total KD loss (not just CE)"""
         self.student.eval()
+        if self.use_projection:
+            self.pca_projector.eval()
+            self.gl_projector.eval()
+
+        if current_lambdas is None:
+            current_lambdas = torch.ones(self.dwa_num_tasks)
+        current_lambdas = current_lambdas.to(self.device)
 
         total_loss = 0.0
         correct = 0
@@ -737,12 +766,53 @@ class DistillationPipeline:
             images = images.to(self.device)
             labels = labels.to(self.device)
 
+            # Teacher forward
+            teacher_out = self.teacher.extract(images)
+            logit_t = teacher_out["logits"]
+
             # Student forward
             feat_map, logit_s = self.student(images)
 
-            # CE Loss
+            # Projector losses
+            if self.use_projection:
+                Q_t = teacher_out["Q_t"]
+                K_t = teacher_out["K_t"]
+                V_t = teacher_out["V_t"]
+                Attn_t = teacher_out["Attn_t"]
+                h_t = teacher_out["block_mean"]
+                pca_out = self.pca_projector(feat_map, Q_t, K_t, V_t)
+                PCAttn_s = pca_out["PCAttnS"]
+                V_s = pca_out["VS"]
+                h_s_proj = self.gl_projector(feat_map)
+                l_proj1, l_proj2 = self.kd_loss_fn(Attn_t, PCAttn_s, V_t, V_s, h_t, h_s_proj)
+            else:
+                l_proj1 = torch.tensor(0.0, device=self.device)
+                l_proj2 = torch.tensor(0.0, device=self.device)
+
+            # Compute all losses
             ce_loss = self.ce_loss_fn(logit_s, labels)
-            total_loss += ce_loss.item()
+            logits_kd_loss = self.logits_loss(logit_s, logit_t.detach())
+            dist_loss = self.dist_loss_fn(logit_s, logit_t.detach())
+
+            # Build total loss (same weighting as training)
+            loss = torch.tensor(0.0, device=self.device)
+            lam_idx = 0
+            if self.use_ce:
+                loss = loss + current_lambdas[lam_idx] * ce_loss
+                lam_idx += 1
+            if self.use_proj1:
+                loss = loss + current_lambdas[lam_idx] * l_proj1
+                lam_idx += 1
+            if self.use_proj2:
+                loss = loss + current_lambdas[lam_idx] * l_proj2
+                lam_idx += 1
+            if self.use_logits:
+                loss = loss + current_lambdas[lam_idx] * logits_kd_loss
+                lam_idx += 1
+            if self.use_dist:
+                loss = loss + current_lambdas[lam_idx] * dist_loss
+
+            total_loss += loss.item()
 
             # Accuracy
             _, predicted = logit_s.max(1)
@@ -753,7 +823,7 @@ class DistillationPipeline:
             all_labels.extend(labels.cpu().numpy())
 
             pbar.set_postfix({
-                "Loss": f"{ce_loss.item():.4f}",
+                "Loss": f"{loss.item():.4f}",
                 "Acc": f"{100.*correct/total:.2f}%"
             })
 
@@ -863,9 +933,20 @@ class DistillationPipeline:
 
         # Khởi tạo DWA với num_tasks và temperature từ config
         # (dwa_num_tasks được auto-tính từ các USE_* flags trong Config)
+        # Build initial_lambdas from config (only for active losses)
+        init_lambdas = None
+        if self.dwa_init_lambdas is not None:
+            all_lambdas = self.dwa_init_lambdas  # [CE, Proj1, Proj2, Logits, DIST]
+            active = []
+            flags = [self.use_ce, self.use_proj1, self.use_proj2, self.use_logits, self.use_dist]
+            for flag, lam in zip(flags, all_lambdas):
+                if flag:
+                    active.append(lam)
+            init_lambdas = torch.tensor(active, dtype=torch.float32)
         dwa = DynamicWeightAveraging(
             num_tasks=self.dwa_num_tasks,
-            temperature=self.dwa_temperature
+            temperature=self.dwa_temperature,
+            initial_lambdas=init_lambdas
         )
 
         history = {
@@ -922,7 +1003,7 @@ class DistillationPipeline:
             dwa.update_loss_history(torch.tensor(active_losses))
             
             # Validate
-            val_metrics = self.validate(self.val_loader, desc="Val")
+            val_metrics = self.validate(self.val_loader, desc="Val", current_lambdas=current_lambdas)
             
             # Get current LR (before step)
             current_lr_student = self.scheduler_student.get_last_lr()[0]

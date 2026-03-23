@@ -58,11 +58,13 @@ class Config:
     # Early stopping
     PATIENCE = 30
 
-    # ===================== Loss Weights =====================
-    LAMBDA1 = 0.05          # L_proj1  (PCA attention loss)
-    LAMBDA2 = 0.05          # L_proj2  (GW linear loss)
-    LAMBDA3 = 0.5           # L_logits (Hinton KD loss)
-    LAMBDA4 = 0.75         # L_dist   (DIST loss)
+    # ===================== DWA Initial Lambda Values =====================
+    # Initial weights for first 2 epochs before DWA computes dynamic weights
+    DWA_INIT_LAMBDA_CE     = 1.0    # Cross-Entropy loss
+    DWA_INIT_LAMBDA_PROJ1  = 1.0    # L_proj1 (PCA attention loss)
+    DWA_INIT_LAMBDA_PROJ2  = 1.0    # L_proj2 (GW linear loss)
+    DWA_INIT_LAMBDA_LOGITS = 1.0    # L_logits (Hinton KD loss)
+    DWA_INIT_LAMBDA_DIST   = 1.0    # L_dist (DIST loss)
 
     LABEL_SMOOTHING = 0.1   # CrossEntropyLoss label smoothing
 
@@ -84,6 +86,15 @@ class Config:
 
     # Hinton KD temperature (for logits distillation)
     TEMPERATURE = 4.0
+
+    # ===================== Weighted Random Sampler =====================
+    USE_WEIGHTED_SAMPLER = False   # Use inverse-frequency weighted sampling for imbalanced data
+
+    # ===================== Focal Loss =====================
+    USE_FOCAL_LOSS = False         # Use PolyFocalLoss instead of CrossEntropyLoss
+    FOCAL_GAMMA = 2.0              # Focusing parameter: higher = more focus on hard examples
+    POLY_EPSILON = 1.0             # Poly coefficient: boosts gradient for ambiguous samples
+    CLASS_WEIGHT_METHOD = 'inverse_freq'  # 'inverse_freq' or 'effective_num'
 
     # DIST loss hyper-params
     DIST_BETA = 1.0
@@ -128,10 +139,13 @@ class Config:
             "block_qkv_id": cls.BLOCK_QKV_ID,
             "device": cls.DEVICE,
             "save_dir": cls.SAVE_DIR,
-            "lambda1": cls.LAMBDA1,
-            "lambda2": cls.LAMBDA2,
-            "lambda3": cls.LAMBDA3,
-            "lambda4": cls.LAMBDA4,
+            "dwa_init_lambdas": [
+                cls.DWA_INIT_LAMBDA_CE,
+                cls.DWA_INIT_LAMBDA_PROJ1,
+                cls.DWA_INIT_LAMBDA_PROJ2,
+                cls.DWA_INIT_LAMBDA_LOGITS,
+                cls.DWA_INIT_LAMBDA_DIST,
+            ],
             "temperature": cls.TEMPERATURE,
             "patience": cls.PATIENCE,
             "dist_beta": cls.DIST_BETA,
@@ -157,6 +171,12 @@ class Config:
             # DWA hyperparams
             "dwa_temperature": cls.DWA_TEMPERATURE,
             "dwa_num_tasks":   dwa_num_tasks,
+            # Weighted sampler & Focal loss
+            "use_weighted_sampler": cls.USE_WEIGHTED_SAMPLER,
+            "use_focal_loss": cls.USE_FOCAL_LOSS,
+            "focal_gamma": cls.FOCAL_GAMMA,
+            "poly_epsilon": cls.POLY_EPSILON,
+            "class_weight_method": cls.CLASS_WEIGHT_METHOD,
         }
 
     @classmethod

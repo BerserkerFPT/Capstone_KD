@@ -1,5 +1,5 @@
 import torch
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader, Subset, WeightedRandomSampler
 from torchvision import transforms
 from torchvision.datasets import ImageFolder
 from sklearn.model_selection import train_test_split
@@ -49,7 +49,8 @@ class DatasetHandler:
         train_ratio=0.70,
         val_ratio=0.15,
         test_ratio=0.15,
-        random_seed=42
+        random_seed=42,
+        use_weighted_sampler=False
     ):
         self.root_dir = root_dir
         self.image_size = image_size
@@ -59,6 +60,7 @@ class DatasetHandler:
         self.val_ratio = val_ratio
         self.test_ratio = test_ratio
         self.random_seed = random_seed
+        self.use_weighted_sampler = use_weighted_sampler
         
         # ===== SET GLOBAL SEED =====
         set_seed(self.random_seed)
@@ -159,6 +161,14 @@ class DatasetHandler:
         
         return train_subset, val_subset, test_subset
     
+    def get_train_labels(self):
+        """
+        Returns labels for the training split.
+        """
+        full_dataset = ImageFolder(root=self.root_dir)
+        train_indices, _, _ = self._split_indices(full_dataset)
+        return [full_dataset.targets[i] for i in train_indices]
+    
     def get_dataloaders(self):
         """
         Returns train, val, test dataloaders
@@ -169,14 +179,32 @@ class DatasetHandler:
         g = torch.Generator()
         g.manual_seed(self.random_seed)
 
+        sampler = None
+        shuffle = True
+
+        if self.use_weighted_sampler:
+            # Compute class weights from training labels
+            train_labels = self.get_train_labels()
+            class_sample_counts = torch.bincount(torch.tensor(train_labels))
+            weights = 1.0 / class_sample_counts.float()
+            samples_weights = weights[torch.tensor(train_labels)]
+            sampler = WeightedRandomSampler(
+                weights=samples_weights.double(),
+                num_samples=len(samples_weights),
+                replacement=True
+            )
+            shuffle = False
+            print(f"\u2705 WeightedRandomSampler enabled (class counts: {class_sample_counts.tolist()})")
+
         train_loader = DataLoader(
             train_subset,
             batch_size=self.batch_size,
-            shuffle=True,
+            shuffle=shuffle if sampler is None else False,
+            sampler=sampler,
             num_workers=self.num_workers,
             pin_memory=True,
             worker_init_fn=worker_init_fn,
-            generator=g,  # ← QUAN TRỌNG
+            generator=g if sampler is None else None,
             drop_last=False,
             persistent_workers=True if self.num_workers > 0 else False
         )

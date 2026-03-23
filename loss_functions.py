@@ -2,6 +2,88 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
+from collections import Counter
+
+
+class PolyFocalLoss(nn.Module):
+    """
+    Poly-Focal Loss: Focal Loss with polynomial modulation.
+
+    Combines:
+    1. Focal Loss (gamma): down-weights easy examples, focuses on hard ones
+    2. Poly term (epsilon): boosts gradient for ambiguous samples
+    3. Class weights (alpha): compensates for class imbalance
+
+    Reference: PolyLoss (Leng et al., 2022) adapted with Focal Loss base.
+    """
+
+    def __init__(self, gamma=2.0, epsilon=1.0, alpha=None, reduction='mean'):
+        super().__init__()
+        self.gamma = gamma
+        self.epsilon = epsilon
+        self.reduction = reduction
+
+        if alpha is not None:
+            if isinstance(alpha, (list, tuple)):
+                self.alpha = torch.tensor(alpha, dtype=torch.float32)
+            elif isinstance(alpha, torch.Tensor):
+                self.alpha = alpha.float()
+            else:
+                self.alpha = None
+        else:
+            self.alpha = None
+
+    def forward(self, logits, targets):
+        num_classes = logits.size(1)
+
+        probs = F.softmax(logits, dim=1)
+        targets_one_hot = F.one_hot(targets, num_classes=num_classes).float()
+        p_t = (probs * targets_one_hot).sum(dim=1)
+
+        focal_weight = (1.0 - p_t) ** self.gamma
+        ce_loss = -torch.log(p_t.clamp(min=1e-8))
+        focal_loss = focal_weight * ce_loss
+        poly_term = self.epsilon * (1.0 - p_t)
+        loss = focal_loss + poly_term
+
+        if self.alpha is not None:
+            alpha = self.alpha.to(logits.device)
+            alpha_t = alpha[targets]
+            loss = alpha_t * loss
+
+        if self.reduction == 'mean':
+            return loss.mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+        return loss
+
+
+def compute_class_weights(labels, method='inverse_freq'):
+    """
+    Compute class weights from label distribution.
+    'inverse_freq': w_i = N / (C * n_i)
+    'effective_num': Effective Number of Samples (Cui et al., 2019), beta=0.999
+    """
+    counter = Counter(labels)
+    num_classes = len(counter)
+    total = len(labels)
+
+    if method == 'inverse_freq':
+        weights = torch.tensor(
+            [total / (num_classes * counter[i]) for i in range(num_classes)],
+            dtype=torch.float32
+        )
+    elif method == 'effective_num':
+        beta = 0.999
+        weights = torch.tensor(
+            [(1.0 - beta) / (1.0 - beta ** counter[i]) for i in range(num_classes)],
+            dtype=torch.float32
+        )
+        weights = weights / weights.sum() * num_classes
+    else:
+        raise ValueError(f"Unknown method: {method}")
+
+    return weights
 
 
 class PCALoss(nn.Module):
