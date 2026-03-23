@@ -7,9 +7,11 @@ class CustomHead(nn.Module):
     def __init__(self):
         super().__init__()
         self.classifier = nn.Sequential(
+            nn.LayerNorm(768),
             nn.Linear(768, 256),
             nn.GELU(),
             nn.Dropout(0.3),
+            nn.LayerNorm(256),
             nn.Linear(256, 128),
             nn.GELU(),
             nn.Dropout(0.3),
