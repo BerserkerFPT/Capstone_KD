@@ -995,7 +995,7 @@ class DistillationPipeline:
         plot_dwa_curves(history, self.save_dir)
 
         # ===== Evaluate all 3 strategies =====
-        all_results = self.evaluate_all_strategies()
+        all_results = self.evaluate_all_strategies(history)
         
         # ===== Cleanup training checkpoints, keep only strategy files =====
         self._cleanup_training_checkpoints()
@@ -1238,7 +1238,7 @@ class DistillationPipeline:
         self._print_strategy_results(metrics, f"Strategy 3 (Last {self.last_n_epochs} Avg)", class_names)
         return metrics
 
-    def evaluate_all_strategies(self):
+    def evaluate_all_strategies(self, history=None):
         """Run all 3 evaluation strategies and export results to Excel"""
         print("\n" + "="*70)
         print("🧪 Evaluating All Strategies")
@@ -1263,7 +1263,7 @@ class DistillationPipeline:
             all_results[f'Strategy 3 (Last {self.last_n_epochs} Avg)'] = metrics_3
 
         # Export all results to Excel
-        self._export_all_strategies_to_excel(all_results, class_names)
+        self._export_all_strategies_to_excel(all_results, class_names, history)
 
         # Print summary table
         print("\n" + "="*70)
@@ -1277,8 +1277,8 @@ class DistillationPipeline:
 
         return all_results
 
-    def _export_all_strategies_to_excel(self, all_results, class_names):
-        """Export all strategy results to Excel with 2 sheets: Macro Results + Per-Class Metrics"""
+    def _export_all_strategies_to_excel(self, all_results, class_names, history=None):
+        """Export all strategy results to Excel with 3 sheets: Macro Results + Per-Class Metrics + Lambda weight"""
         excel_path = os.path.join(self.save_dir, "all_strategies_results.xlsx")
 
         with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
@@ -1323,6 +1323,32 @@ class DistillationPipeline:
             if per_class_rows:
                 df_per_class = pd.DataFrame(per_class_rows)
                 df_per_class.to_excel(writer, sheet_name="Per-Class Metrics", index=False)
+                
+            # ===== Sheet 3: Lambda weight at lowest val_loss (Strategy 1) =====
+            if history:
+                best = self.checkpoint_manager.get_best_checkpoint()
+                if best is not None:
+                    best_epoch = best[0]
+                    idx = best_epoch - 1
+                    
+                    if idx >= 0 and idx < len(history.get("lambda_ce", [])):
+                        lambda_dict = {
+                            "Strategy": "Strategy 1 (Best)",
+                            "Best Epoch": best_epoch,
+                        }
+                        if self.use_ce:
+                            lambda_dict["Lambda_CE"] = round(history["lambda_ce"][idx], 4)
+                        if self.use_proj1:
+                            lambda_dict["Lambda_Proj1"] = round(history["lambda_l1"][idx], 4)
+                        if self.use_proj2:
+                            lambda_dict["Lambda_Proj2"] = round(history["lambda_l2"][idx], 4)
+                        if self.use_logits:
+                            lambda_dict["Lambda_Logits"] = round(history["lambda_l3"][idx], 4)
+                        if self.use_dist:
+                            lambda_dict["Lambda_DIST"] = round(history["lambda_dist"][idx], 4)
+
+                        df_lambdas = pd.DataFrame([lambda_dict])
+                        df_lambdas.to_excel(writer, sheet_name="Lambda weight", index=False)
 
         print(f"\n📁 All strategies results exported to: {excel_path}")
 
