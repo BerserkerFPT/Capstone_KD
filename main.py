@@ -1,6 +1,7 @@
 import os
 import copy
 import json
+import time
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -964,8 +965,10 @@ class DistillationPipeline:
             "lambda_l1":  [],
             "lambda_l2":  [],
             "lambda_l3":  [],
-            "lambda_dist":[]
+            "lambda_dist":[],
+            "epoch_time": []
         }
+        training_start_time = time.time()
 
         if resume_path and os.path.exists(resume_path):
             start_epoch, best_val_loss = self.load_checkpoint(resume_path)
@@ -991,8 +994,9 @@ class DistillationPipeline:
             print(f"\n[DWA] Epoch {epoch+1} lambdas: {lam_str}")
 
             # Train
+            epoch_start_time = time.time()
             train_metrics = self.train_one_epoch(epoch, current_lambdas)
-            
+
             # Cập nhật DWA: chỉ đưa losses của các tasks đang active
             active_losses = []
             if self.use_ce:     active_losses.append(train_metrics["ce_loss_s"])
@@ -1004,7 +1008,8 @@ class DistillationPipeline:
             
             # Validate
             val_metrics = self.validate(self.val_loader, desc="Val", current_lambdas=current_lambdas)
-            
+            epoch_elapsed = time.time() - epoch_start_time
+
             # Get current LR (before step)
             current_lr_student = self.scheduler_student.get_last_lr()[0]
             # current_lr_teacher = self.scheduler_teacher.get_last_lr()[0]
@@ -1021,6 +1026,7 @@ class DistillationPipeline:
             history["raw_l2"].append(train_metrics["raw_l2"])
             history["raw_l3"].append(train_metrics["raw_l3"])
             history["raw_dist"].append(train_metrics["raw_dist"])
+            history["epoch_time"].append(round(epoch_elapsed, 2))
 
             # Lambda history: map DWA slots → fixed 5-key history
             lam_idx = 0
@@ -1070,6 +1076,8 @@ class DistillationPipeline:
         
         # Save checkpoint manager info
         self.checkpoint_manager.save_info()
+
+        history["total_training_time"] = round(time.time() - training_start_time, 2)
 
         # ===== Plot learning curves =====
         plot_training_curves(history, self.save_dir)
@@ -1430,6 +1438,27 @@ class DistillationPipeline:
 
                         df_lambdas = pd.DataFrame([lambda_dict])
                         df_lambdas.to_excel(writer, sheet_name="Lambda weight", index=False)
+
+            # ===== Sheet 4: Training Time =====
+            if history and "epoch_time" in history:
+                epoch_times = history["epoch_time"]
+                total_time = history.get("total_training_time", sum(epoch_times))
+                time_rows = []
+                for i, t in enumerate(epoch_times):
+                    m, s = divmod(int(t), 60)
+                    time_rows.append({
+                        "Epoch": i + 1,
+                        "Time (s)": t,
+                        "Time (mm:ss)": f"{m:02d}:{s:02d}"
+                    })
+                total_m, total_s = divmod(int(total_time), 60)
+                time_rows.append({
+                    "Epoch": "Total",
+                    "Time (s)": total_time,
+                    "Time (mm:ss)": f"{total_m:02d}:{total_s:02d}"
+                })
+                df_time = pd.DataFrame(time_rows)
+                df_time.to_excel(writer, sheet_name="Training Time", index=False)
 
         print(f"\n📁 All strategies results exported to: {excel_path}")
 
