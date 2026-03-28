@@ -19,7 +19,7 @@ from Student_extraction import StudentExtractor
 from PCA_projector import PCAttentionProjector
 from GWLinear_projector import GWLinearProjector
 from loss_functions import ProjectionLoss, LogitsKDLoss, DIST, PolyFocalLoss, compute_class_weights
-from dataset import DatasetHandler
+from dataset import DatasetHandler, set_seed
 from visualization import plot_training_curves, plot_dwa_curves
 torch.use_deterministic_algorithms(True, warn_only=True)
 
@@ -300,6 +300,8 @@ class DistillationPipeline:
         # --- DWA hyperparameters ---
         dwa_temperature=2.0,   # Temperature T for DWA softmax
         dwa_num_tasks=5,       # Auto-computed from active losses in Config
+        # --- Random seed ---
+        random_seed=42,
         # --- Weighted sampler & Focal loss ---
         use_weighted_sampler=False,
         use_focal_loss=False,
@@ -307,6 +309,11 @@ class DistillationPipeline:
         poly_epsilon=1.0,
         class_weight_method='inverse_freq',
     ):
+        # ===== SET GLOBAL SEED FIRST (before any model/data init) =====
+        self.random_seed = random_seed
+        set_seed(self.random_seed)
+        print(f"🌱 Global random seed set to: {self.random_seed}")
+
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         self.epochs = epochs
         self.warmup_epochs_student = warmup_epochs_student
@@ -355,7 +362,8 @@ class DistillationPipeline:
             root_dir=data_dir,
             batch_size=batch_size,
             num_workers=num_workers,
-            use_weighted_sampler=use_weighted_sampler
+            use_weighted_sampler=use_weighted_sampler,
+            random_seed=self.random_seed
         )
         self.train_loader, self.val_loader, self.test_loader = self.data_handler.get_dataloaders()
         
@@ -512,6 +520,7 @@ class DistillationPipeline:
             {"Group": "Checkpoint","Parameter": "last_n_epochs",        "Value": self.last_n_epochs},
             # ── Meta ──
             {"Group": "Meta",      "Parameter": "device",               "Value": str(self.device)},
+            {"Group": "Meta",      "Parameter": "random_seed",          "Value": self.random_seed},
             {"Group": "Meta",      "Parameter": "timestamp",            "Value": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
             {"Group": "Meta",      "Parameter": "run",                  "Value": run_name},
         ]
