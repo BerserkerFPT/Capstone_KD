@@ -177,6 +177,7 @@ class Config:
             "focal_gamma": cls.FOCAL_GAMMA,
             "poly_epsilon": cls.POLY_EPSILON,
             "class_weight_method": cls.CLASS_WEIGHT_METHOD,
+            "random_seed": cls.RANDOM_SEED,
         }
 
     @classmethod
