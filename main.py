@@ -300,6 +300,7 @@ class DistillationPipeline:
         # --- DWA hyperparameters ---
         dwa_temperature=2.0,   # Temperature T for DWA softmax
         dwa_num_tasks=5,       # Auto-computed from active losses in Config
+        use_dwa=True,          # Toggle DWA on/off
         # --- Random seed ---
         random_seed=42,
         # --- Weighted sampler & Focal loss ---
@@ -337,6 +338,7 @@ class DistillationPipeline:
         # --- DWA hyperparameters ---
         self.dwa_temperature = dwa_temperature
         self.dwa_num_tasks   = dwa_num_tasks
+        self.use_dwa         = use_dwa
         # --- Weighted sampler & Focal loss ---
         self.use_weighted_sampler = use_weighted_sampler
         self.use_focal_loss = use_focal_loss
@@ -498,6 +500,7 @@ class DistillationPipeline:
             {"Group": "Loss Weights", "Parameter": "dwa_init_lambda_Logits", "Value": self.dwa_init_lambdas[3] if self.dwa_init_lambdas else 1.0},
             {"Group": "Loss Weights", "Parameter": "dwa_init_lambda_DIST",   "Value": self.dwa_init_lambdas[4] if self.dwa_init_lambdas else 1.0},
             # ── DWA ──
+            {"Group": "DWA",       "Parameter": "use_dwa",              "Value": self.use_dwa},
             {"Group": "DWA",       "Parameter": "dwa_temperature",      "Value": self.dwa_temperature},
             {"Group": "DWA",       "Parameter": "dwa_num_tasks",        "Value": self.dwa_num_tasks},
             # ── Logits KD ──
@@ -959,6 +962,11 @@ class DistillationPipeline:
             initial_lambdas=init_lambdas
         )
 
+        if not self.use_dwa:
+            print("[DWA] ⚠️  DWA is DISABLED — using fixed initial lambdas for all epochs.")
+        else:
+            print("[DWA] ✅ DWA is ENABLED — weights will be adjusted dynamically.")
+
         history = {
             "train_loss": [],
             "val_loss":   [],
@@ -990,7 +998,11 @@ class DistillationPipeline:
 
         for epoch in range(start_epoch, self.epochs):
             # Lấy lambda động cho epoch hiện tại
-            current_lambdas = dwa.get_lambdas()
+            if self.use_dwa:
+                current_lambdas = dwa.get_lambdas()
+            else:
+                # Fixed lambdas: always use initial values
+                current_lambdas = init_lambdas.clone() if init_lambdas is not None else torch.ones(self.dwa_num_tasks)
 
             # Log DWA lambdas theo active losses
             active_names  = (["CE"]     if self.use_ce     else []) + \
@@ -1014,8 +1026,8 @@ class DistillationPipeline:
             if self.use_logits: active_losses.append(train_metrics["raw_l3"])
             if self.use_dist:   active_losses.append(train_metrics["raw_dist"])
             dwa.update_loss_history(torch.tensor(active_losses))
-            
-            # Validate
+
+            # Validate (use current_lambdas for consistent val loss calculation)
             val_metrics = self.validate(self.val_loader, desc="Val", current_lambdas=current_lambdas)
             epoch_elapsed = time.time() - epoch_start_time
 

@@ -81,6 +81,8 @@ class Config:
     USE_DIST   = True   # L_dist  — DIST relational loss
 
     # ===================== DWA Hyperparameters =====================
+    # Toggle DWA on/off: True = dynamic weights, False = fixed initial lambdas
+    USE_DWA = True
     # Temperature T for DWA softmax (higher T → more uniform weights)
     DWA_TEMPERATURE = 2.5
 
@@ -169,6 +171,7 @@ class Config:
             "use_logits": cls.USE_LOGITS,
             "use_dist":   cls.USE_DIST,
             # DWA hyperparams
+            "use_dwa":         cls.USE_DWA,
             "dwa_temperature": cls.DWA_TEMPERATURE,
             "dwa_num_tasks":   dwa_num_tasks,
             # Weighted sampler & Focal loss
