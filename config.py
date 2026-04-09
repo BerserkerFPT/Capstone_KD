@@ -89,6 +89,10 @@ class Config:
     # Hinton KD temperature (for logits distillation)
     TEMPERATURE = 4.0
 
+    # ===================== Cross-Validation =====================
+    USE_CROSS_VALIDATION = False   # Bật/tắt Pure K-Fold Cross-Validation (sklearn StratifiedKFold)
+    CV_N_SPLITS = 5                # Số fold cho Cross-Validation
+
     # ===================== Weighted Random Sampler =====================
     USE_WEIGHTED_SAMPLER = False   # Use inverse-frequency weighted sampling for imbalanced data
 
@@ -181,6 +185,9 @@ class Config:
             "poly_epsilon": cls.POLY_EPSILON,
             "class_weight_method": cls.CLASS_WEIGHT_METHOD,
             "random_seed": cls.RANDOM_SEED,
+            # Cross-Validation
+            "use_cross_validation": cls.USE_CROSS_VALIDATION,
+            "cv_n_splits": cls.CV_N_SPLITS,
         }
 
     @classmethod

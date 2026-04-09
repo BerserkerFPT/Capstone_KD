@@ -309,6 +309,12 @@ class DistillationPipeline:
         focal_gamma=2.0,
         poly_epsilon=1.0,
         class_weight_method='inverse_freq',
+        # --- Cross-Validation ---
+        fold_indices=None,       # (train_idx, val_idx, test_idx) for CV fold
+        fold_save_dir=None,      # Override save_dir for CV fold
+        # --- Unused CV params (kept for unpacking compatibility) ---
+        use_cross_validation=False,
+        cv_n_splits=5,
     ):
         # ===== SET GLOBAL SEED FIRST (before any model/data init) =====
         self.random_seed = random_seed
@@ -350,13 +356,18 @@ class DistillationPipeline:
         # self.eta_min_teacher = eta_min_teacher,
         os.makedirs(save_dir, exist_ok=True)
         
-        # Auto-detect experiment run number
-        run_number = 1
-        while os.path.exists(os.path.join(save_dir, f"run_{run_number}")):
-            run_number += 1
-        self.save_dir = os.path.join(save_dir, f"run_{run_number}")
-        os.makedirs(self.save_dir, exist_ok=True)
-        print(f"📂 Experiment run #{run_number}, saving to: {self.save_dir}")
+        # Auto-detect experiment run number (skip if fold_save_dir provided)
+        if fold_save_dir is not None:
+            self.save_dir = fold_save_dir
+            os.makedirs(self.save_dir, exist_ok=True)
+            print(f"📂 CV fold saving to: {self.save_dir}")
+        else:
+            run_number = 1
+            while os.path.exists(os.path.join(save_dir, f"run_{run_number}")):
+                run_number += 1
+            self.save_dir = os.path.join(save_dir, f"run_{run_number}")
+            os.makedirs(self.save_dir, exist_ok=True)
+            print(f"📂 Experiment run #{run_number}, saving to: {self.save_dir}")
         
         # ===== Dataset =====
         print("Loading dataset...")
@@ -365,7 +376,8 @@ class DistillationPipeline:
             batch_size=batch_size,
             num_workers=num_workers,
             use_weighted_sampler=use_weighted_sampler,
-            random_seed=self.random_seed
+            random_seed=self.random_seed,
+            fold_indices=fold_indices
         )
         self.train_loader, self.val_loader, self.test_loader = self.data_handler.get_dataloaders()
         
@@ -1529,6 +1541,8 @@ class DistillationPipeline:
 # ===== Main =====
 if __name__ == "__main__":
     from config import Config
+    from sklearn.model_selection import StratifiedKFold, train_test_split
+    from torchvision.datasets import ImageFolder
 
     os.environ["CUDA_VISIBLE_DEVICES"] = Config.CUDA_VISIBLE_DEVICES
 
@@ -1536,8 +1550,122 @@ if __name__ == "__main__":
     config = Config.to_pipeline_dict()
     print(f"[KD] block_ids = {config['block_ids']}")
     print(f"[KD] block_qkv_id = {config['block_qkv_id']}")
-    pipeline = DistillationPipeline(**config)
-    pipeline.train()
+
+    # Warn if both WRS and Focal Loss are active
+    if Config.USE_WEIGHTED_SAMPLER and Config.USE_FOCAL_LOSS:
+        print("\n⚠ WARNING: Cả WeightedRandomSampler và PolyFocalLoss đều đang BẬT!")
+        print("  → WRS xử lý imbalance ở data level (oversampling minority class)")
+        print("  → Focal Loss xử lý imbalance ở loss level (focus on hard examples)")
+        print("  → Có thể gây double-correction. Hãy cân nhắc tắt 1 trong 2 nếu kết quả không tốt.")
+
+    # ===================== CROSS-VALIDATION MODE (Pure K-Fold) =====================
+    if Config.USE_CROSS_VALIDATION:
+        print(f"\n{'='*70}")
+        print(f" PURE CROSS-VALIDATION ({Config.CV_N_SPLITS}-Fold Stratified)")
+        print(f"{'='*70}")
+
+        # Load full dataset to get all targets
+        full_dataset = ImageFolder(root=Config.DATA_DIR)
+        all_targets = np.array(full_dataset.targets)
+        all_indices = np.arange(len(full_dataset))
+
+        print(f"  Total data: {len(all_indices)} images → chia {Config.CV_N_SPLITS} fold")
+
+        skf = StratifiedKFold(
+            n_splits=Config.CV_N_SPLITS,
+            shuffle=True,
+            random_state=Config.RANDOM_SEED
+        )
+
+        # Auto-detect run number for CV
+        run_number = 1
+        while os.path.exists(os.path.join(Config.SAVE_DIR, f"run_{run_number}")):
+            run_number += 1
+        cv_run_dir = os.path.join(Config.SAVE_DIR, f"run_{run_number}")
+        os.makedirs(cv_run_dir, exist_ok=True)
+        print(f"📂 CV run #{run_number}, saving to: {cv_run_dir}")
+
+        all_fold_results = {}
+
+        for fold_idx, (train_val_idx, test_idx) in enumerate(skf.split(all_indices, all_targets), 1):
+            print(f"\n{'='*70}")
+            print(f" FOLD {fold_idx}/{Config.CV_N_SPLITS}")
+            print(f"{'='*70}")
+
+            # Tách train_val → train (85%) + val (15%) cho early stopping
+            train_val_targets = all_targets[train_val_idx]
+            train_idx, val_idx = train_test_split(
+                train_val_idx,
+                test_size=0.15,
+                stratify=train_val_targets,
+                random_state=Config.RANDOM_SEED
+            )
+
+            print(f"  Train: {len(train_idx)} | Val: {len(val_idx)} | Test (fold): {len(test_idx)}")
+
+            fold_save_dir = os.path.join(cv_run_dir, f"fold_{fold_idx}")
+            fold_indices = (train_idx, val_idx, test_idx)
+
+            try:
+                pipeline = DistillationPipeline(
+                    **config,
+                    fold_indices=fold_indices,
+                    fold_save_dir=fold_save_dir
+                )
+                fold_results = pipeline.train()
+
+                all_fold_results[f"Fold {fold_idx}"] = fold_results
+                print(f"  ✅ Fold {fold_idx} completed")
+
+            except Exception as e:
+                print(f"  ✗ Fold {fold_idx} failed: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
+
+        # ===== Tổng hợp kết quả CV =====
+        print(f"\n{'='*70}")
+        print(f" CROSS-VALIDATION SUMMARY ({Config.CV_N_SPLITS}-Fold)")
+        print(f"{'='*70}")
+
+        cv_summary_rows = []
+        # Collect all strategy names from first successful fold
+        strategy_names = []
+        for fold_name, fold_res in all_fold_results.items():
+            strategy_names = list(fold_res.keys())
+            break
+
+        for strategy_name in strategy_names:
+            fold_metrics = []
+            for fold_name, fold_res in all_fold_results.items():
+                if strategy_name in fold_res:
+                    fold_metrics.append(fold_res[strategy_name])
+
+            if fold_metrics:
+                metric_keys = ['Accuracy (%)', 'Precision (%)', 'Recall (%)', 'F1-Score (%)', 'AUC (%)']
+                row = {'Strategy': strategy_name}
+                for key in metric_keys:
+                    values = [m[key] for m in fold_metrics if key in m]
+                    if values:
+                        row[f"{key} (mean)"] = round(np.mean(values), 2)
+                        row[f"{key} (std)"] = round(np.std(values), 2)
+                cv_summary_rows.append(row)
+
+        if cv_summary_rows:
+            cv_df = pd.DataFrame(cv_summary_rows)
+            cv_excel_path = os.path.join(cv_run_dir, 'cv_summary_results.xlsx')
+            cv_df.to_excel(cv_excel_path, index=False)
+            print(f"\n✓ CV Summary saved to: {cv_excel_path}")
+            print(cv_df.to_string(index=False))
+
+        print(f"\n{'='*70}")
+        print(f" CROSS-VALIDATION COMPLETED!")
+        print(f"{'='*70}")
+
+    else:
+        # ===================== NORMAL MODE (no CV) =====================
+        pipeline = DistillationPipeline(**config)
+        pipeline.train()
 
 
 

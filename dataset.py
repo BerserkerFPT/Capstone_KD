@@ -50,7 +50,8 @@ class DatasetHandler:
         val_ratio=0.15,
         test_ratio=0.15,
         random_seed=42,
-        use_weighted_sampler=False
+        use_weighted_sampler=False,
+        fold_indices=None
     ):
         self.root_dir = root_dir
         self.image_size = image_size
@@ -61,6 +62,7 @@ class DatasetHandler:
         self.test_ratio = test_ratio
         self.random_seed = random_seed
         self.use_weighted_sampler = use_weighted_sampler
+        self.fold_indices = fold_indices  # (train_idx, val_idx, test_idx) for CV
         
         # ===== SET GLOBAL SEED =====
         set_seed(self.random_seed)
@@ -103,8 +105,13 @@ class DatasetHandler:
     def _split_indices(self, dataset):
         """
         Split dataset indices into train/val/test (70/15/15)
-        Stratified split to maintain class balance
+        Stratified split to maintain class balance.
+        If fold_indices is provided (CV mode), use those directly.
         """
+        # Sử dụng fold_indices nếu có (Cross-Validation mode)
+        if self.fold_indices is not None:
+            return self.fold_indices
+
         # Sử dụng cache để đảm bảo consistency
         if self._cached_indices is not None:
             return self._cached_indices
