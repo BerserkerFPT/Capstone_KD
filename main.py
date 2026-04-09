@@ -9,9 +9,10 @@ import shutil
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 import torch
-import json
+import numpy as np
 import pandas as pd
 from datetime import datetime
+from sklearn.model_selection import StratifiedKFold
 
 from config import Config
 from dataset import load_dataset, create_dataloaders
@@ -130,6 +131,113 @@ def delete_model_checkpoints(model_name, checkpoints_dir):
         print(f"  ⚠ No checkpoints found at: {model_checkpoint_dir}")
 
 
+def export_run_config(run_folder, num_classes=None, class_names=None, 
+                      train_count=0, val_count=0, test_count=0):
+    """
+    Xuất toàn bộ config của lần chạy ra file Excel (run_config.xlsx).
+    Mỗi nhóm config = 1 sheet riêng, dễ đọc và so sánh giữa các lần chạy.
+    Nếu tắt focal loss → các param focal tự set 0/None.
+    Nếu tắt WRS → ghi rõ DISABLED.
+    
+    Args:
+        run_folder: Folder lưu kết quả của lần chạy
+        num_classes: Số lượng class
+        class_names: Danh sách tên class
+        train_count, val_count, test_count: Số lượng ảnh mỗi split
+    """
+    is_focal = Config.LOSS_FUNCTION == 'poly_focal'
+    
+    # Sheet 1: Dataset & Splitting
+    dataset_rows = [
+        ("dataset_path", Config.DATASET_PATH),
+        ("num_classes", num_classes),
+        ("class_names", ", ".join(class_names) if class_names else ""),
+        ("train_ratio", Config.TRAIN_RATIO),
+        ("val_ratio", Config.VAL_RATIO),
+        ("test_ratio", Config.TEST_RATIO),
+        ("train_samples", train_count),
+        ("val_samples", val_count),
+        ("test_samples", test_count),
+        ("image_size", Config.IMAGE_SIZE),
+        ("random_seed", Config.RANDOM_SEED),
+    ]
+    
+    # Sheet 2: Model
+    model_rows = [
+        ("models", ", ".join(Config.MODELS)),
+        ("classifier_config", str(Config.CLASSIFIER_CONFIG)),
+        ("dropout_rate", Config.DROPOUT_RATE),
+    ]
+    
+    # Sheet 3: Training Hyperparameters
+    training_rows = [
+        ("batch_size", Config.BATCH_SIZE),
+        ("num_epochs", Config.NUM_EPOCHS),
+        ("learning_rate", Config.LEARNING_RATE),
+        ("weight_decay", Config.WEIGHT_DECAY),
+        ("warmup_epochs", Config.WARMUP_EPOCHS),
+        ("eta_min (CosineAnnealing)", Config.ETA_MIN),
+        ("num_workers", Config.NUM_WORKERS),
+        ("early_stopping_patience", Config.EARLY_STOPPING_PATIENCE),
+        ("lr_decay_patience", Config.LR_DECAY_PATIENCE),
+        ("lr_decay_factor", Config.LR_DECAY_FACTOR),
+    ]
+    
+    # Sheet 4: Loss Function
+    loss_rows = [
+        ("loss_function", Config.LOSS_FUNCTION),
+        ("label_smoothing", Config.LABEL_SMOOTHING if not is_focal else 0),
+        ("focal_gamma", Config.FOCAL_GAMMA if is_focal else 0),
+        ("poly_epsilon", Config.POLY_EPSILON if is_focal else 0),
+        ("class_weight_method", Config.CLASS_WEIGHT_METHOD if is_focal else "N/A"),
+    ]
+    
+    # Sheet 5: Sampler & Cross-Validation
+    sampler_cv_rows = [
+        ("use_weighted_random_sampler", Config.USE_WEIGHTED_SAMPLER),
+        ("use_cross_validation", Config.USE_CROSS_VALIDATION),
+        ("cv_n_splits", Config.CV_N_SPLITS if Config.USE_CROSS_VALIDATION else 0),
+    ]
+    
+    # Sheet 6: Evaluation & Output
+    eval_rows = [
+        ("top_k_values", str(Config.TOP_K_VALUES)),
+        ("last_n_epochs", Config.LAST_N_EPOCHS),
+        ("keep_last_n_checkpoints", Config.KEEP_LAST_N_CHECKPOINTS),
+        ("keep_top_k_checkpoints", Config.KEEP_TOP_K_CHECKPOINTS),
+        ("auto_delete_checkpoints", Config.AUTO_DELETE_CHECKPOINTS),
+        ("experiment_name", Config.EXPERIMENT_NAME),
+    ]
+    
+    # Sheet 7: Compatibility Notes
+    notes_rows = [
+        ("WRS + Focal Loss", 
+         "BOTH ACTIVE - WRS handles imbalance at data level, Focal Loss at loss level. "
+         "May double-correct for imbalance." 
+         if (Config.USE_WEIGHTED_SAMPLER and is_focal) else "No conflict"),
+        ("Metrics Averaging", 
+         "All metrics (Precision, Recall, F1, AUC) use MACRO averaging. "
+         "Accuracy is computed as overall (correct/total)."),
+    ]
+    
+    config_path = os.path.join(run_folder, "run_config.xlsx")
+    with pd.ExcelWriter(config_path, engine='openpyxl') as writer:
+        for sheet_name, rows in [
+            ("Dataset & Splitting", dataset_rows),
+            ("Model", model_rows),
+            ("Training Hyperparams", training_rows),
+            ("Loss Function", loss_rows),
+            ("Sampler & CV", sampler_cv_rows),
+            ("Evaluation & Output", eval_rows),
+            ("Notes", notes_rows),
+        ]:
+            df = pd.DataFrame(rows, columns=["Parameter", "Value"])
+            df.to_excel(writer, sheet_name=sheet_name, index=False)
+    
+    print(f"  ✓ Full run config exported to: {config_path}")
+    return config_path
+
+
 def main():
     """
     Main pipeline (Process each model sequentially to save disk space):
@@ -198,6 +306,151 @@ def main():
     num_classes = len(class_names)
     print(f"Classes: {class_names}")
     
+    # Export full run config
+    print("\n[Config] Exporting run configuration...")
+    export_run_config(
+        run_folder, 
+        num_classes=num_classes, 
+        class_names=class_names,
+        train_count=len(train_paths),
+        val_count=len(val_paths),
+        test_count=len(test_paths)
+    )
+    
+    # Warn if both WRS and Focal Loss are active
+    if Config.USE_WEIGHTED_SAMPLER and Config.LOSS_FUNCTION == 'poly_focal':
+        print("\n⚠ WARNING: Cả WeightedRandomSampler và PolyFocalLoss đều đang BẬT!")
+        print("  → WRS xử lý imbalance ở data level (oversampling minority class)")
+        print("  → Focal Loss xử lý imbalance ở loss level (focus on hard examples)")
+        print("  → Có thể gây double-correction. Hãy cân nhắc tắt 1 trong 2 nếu kết quả không tốt.")
+    
+    # ===================== CROSS-VALIDATION MODE (Pure K-Fold) =====================
+    if Config.USE_CROSS_VALIDATION:
+        print(f"\n{'='*70}")
+        print(f" PURE CROSS-VALIDATION ({Config.CV_N_SPLITS}-Fold Stratified)")
+        print(f"{'='*70}")
+        
+        # Gộp toàn bộ data (train + val + test) → 1 pool duy nhất
+        all_paths = train_paths + val_paths + test_paths
+        all_labels = train_labels + val_labels + test_labels
+        
+        print(f"  Total data: {len(all_paths)} images → chia {Config.CV_N_SPLITS} fold")
+        
+        skf = StratifiedKFold(
+            n_splits=Config.CV_N_SPLITS, 
+            shuffle=True, 
+            random_state=Config.RANDOM_SEED
+        )
+        
+        all_fold_results = {}  # {model_name: [fold_results]}
+        
+        for fold_idx, (train_idx, test_idx) in enumerate(skf.split(all_paths, all_labels), 1):
+            print(f"\n{'='*70}")
+            print(f" FOLD {fold_idx}/{Config.CV_N_SPLITS}")
+            print(f"{'='*70}")
+            
+            fold_train_paths = [all_paths[i] for i in train_idx]
+            fold_train_labels = [all_labels[i] for i in train_idx]
+            fold_test_paths = [all_paths[i] for i in test_idx]
+            fold_test_labels = [all_labels[i] for i in test_idx]
+            
+            # Tách 1 phần từ train làm validation cho early stopping
+            from sklearn.model_selection import train_test_split
+            fold_train_paths, fold_val_paths, fold_train_labels, fold_val_labels = train_test_split(
+                fold_train_paths, fold_train_labels,
+                test_size=0.15,
+                stratify=fold_train_labels,
+                random_state=Config.RANDOM_SEED
+            )
+            
+            print(f"  Train: {len(fold_train_paths)} | Val: {len(fold_val_paths)} | Test (fold): {len(fold_test_paths)}")
+            
+            # Create dataloaders for this fold
+            fold_train_loader, fold_val_loader, fold_test_loader = create_dataloaders(
+                fold_train_paths, fold_train_labels,
+                fold_val_paths, fold_val_labels,
+                fold_test_paths, fold_test_labels,
+                Config.BATCH_SIZE,
+                Config.NUM_WORKERS
+            )
+            
+            fold_folder = os.path.join(run_folder, f"fold_{fold_idx}")
+            os.makedirs(fold_folder, exist_ok=True)
+            
+            for model_name in Config.MODELS:
+                print(f"\n  [Fold {fold_idx}] Training {model_name}...")
+                try:
+                    checkpoint_manager, history = train_model(
+                        model_name,
+                        fold_train_loader,
+                        fold_val_loader,
+                        num_classes,
+                        device,
+                        class_names=class_names,
+                        train_labels=fold_train_labels,
+                        save_dir=fold_folder
+                    )
+                    
+                    # Evaluate trên fold test set (phần data luân phiên làm test)
+                    strategy_ckpt_dir = os.path.join(fold_folder, model_name, 'checkpoints')
+                    results = evaluate_all_strategies(
+                        model_name, checkpoint_manager, fold_test_loader, fold_train_loader,
+                        num_classes, device, class_names=class_names, save_dir=strategy_ckpt_dir
+                    )
+                    
+                    if model_name not in all_fold_results:
+                        all_fold_results[model_name] = []
+                    all_fold_results[model_name].append(results)
+                    
+                    save_model_results(model_name, results, fold_folder)
+                    
+                    if Config.AUTO_DELETE_CHECKPOINTS:
+                        delete_model_checkpoints(model_name, Config.CHECKPOINTS_DIR)
+                    
+                    print(f"  ✅ Fold {fold_idx} - {model_name} completed")
+                    
+                except Exception as e:
+                    print(f"  ✗ Fold {fold_idx} - {model_name} failed: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    continue
+        
+        # Tổng hợp kết quả CV
+        print(f"\n{'='*70}")
+        print(f" CROSS-VALIDATION SUMMARY ({Config.CV_N_SPLITS}-Fold)")
+        print(f"{'='*70}")
+        
+        cv_summary_rows = []
+        for model_name, fold_results_list in all_fold_results.items():
+            # Lấy Strategy 1 (best checkpoint) từ mỗi fold
+            for strategy_name in fold_results_list[0].keys():
+                fold_metrics = []
+                for fold_res in fold_results_list:
+                    if strategy_name in fold_res:
+                        fold_metrics.append(fold_res[strategy_name]['metrics'])
+                
+                if fold_metrics:
+                    avg_metrics = {}
+                    for key in fold_metrics[0].keys():
+                        values = [m[key] for m in fold_metrics]
+                        avg_metrics[f"{key} (mean)"] = np.mean(values)
+                        avg_metrics[f"{key} (std)"] = np.std(values)
+                    
+                    row = {'Model': model_name, 'Strategy': strategy_name, **avg_metrics}
+                    cv_summary_rows.append(row)
+        
+        cv_df = pd.DataFrame(cv_summary_rows)
+        cv_excel_path = os.path.join(run_folder, 'cv_summary_results.xlsx')
+        cv_df.to_excel(cv_excel_path, index=False)
+        print(f"\n✓ CV Summary saved to: {cv_excel_path}")
+        print(cv_df.to_string(index=False))
+        
+        print(f"\n{'='*70}")
+        print(f" CROSS-VALIDATION COMPLETED!")
+        print(f"{'='*70}")
+        return
+    
+    # ===================== NORMAL MODE (no CV) =====================
     # Create dataloaders
     train_loader, val_loader, test_loader = create_dataloaders(
         train_paths, train_labels,
@@ -313,37 +566,8 @@ def main():
     print(f"\n[Step 5/6] Generating combined performance chart...")
     create_performance_charts(df, run_folder)
     
-    # Step 6: Save experiment info
-    print(f"\n[Step 6/6] Saving experiment metadata...")
-    experiment_info = {
-        'run_number': run_number,
-        'timestamp': timestamp,
-        'dataset_path': Config.DATASET_PATH,
-        'num_classes': num_classes,
-        'class_names': class_names,
-        'train_samples': len(train_paths),
-        'val_samples': len(val_paths),
-        'test_samples': len(test_paths),
-        'models_trained': successfully_processed,
-        'config': {
-            'batch_size': Config.BATCH_SIZE,
-            'num_epochs': Config.NUM_EPOCHS,
-            'learning_rate': Config.LEARNING_RATE,
-            'early_stopping_patience': Config.EARLY_STOPPING_PATIENCE,
-            'classifier_config': Config.CLASSIFIER_CONFIG,
-            'dropout_rate': Config.DROPOUT_RATE,
-            'loss_function': Config.LOSS_FUNCTION,
-            'focal_gamma': Config.FOCAL_GAMMA if Config.LOSS_FUNCTION == 'poly_focal' else None,
-            'poly_epsilon': Config.POLY_EPSILON if Config.LOSS_FUNCTION == 'poly_focal' else None,
-            'class_weight_method': Config.CLASS_WEIGHT_METHOD if Config.LOSS_FUNCTION == 'poly_focal' else None
-        }
-    }
-    
-    info_path = os.path.join(run_folder, f'experiment_info.json')
-    with open(info_path, 'w') as f:
-        json.dump(experiment_info, f, indent=4)
-    
-    print(f"\n✓ Experiment info saved to: {info_path}")
+    # Step 6: Experiment info already saved via export_run_config
+    print(f"\n[Step 6/6] Run config already exported at start.")
     
     # Final summary
     print("\n" + "="*70)
@@ -353,7 +577,7 @@ def main():
     print(f"  - Folder: {run_folder}")
     print(f"  - Combined Excel: {excel_path}")
     print(f"  - Combined Chart: {os.path.join(run_folder, 'performance_comparison.png')}")
-    print(f"  - Experiment Info: {info_path}")
+    print(f"  - Run Config: {os.path.join(run_folder, 'run_config.xlsx')}")
     print(f"  - Individual Results: {run_folder}/<model_name>/")
     print(f"\n💾 Disk Space Optimization:")
     print(f"  - All checkpoints deleted after evaluation")

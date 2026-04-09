@@ -10,12 +10,6 @@ import torch.nn as nn
 import torch.optim as optim
 from tqdm import tqdm
 from collections import Counter
-try:
-    import wandb
-    WANDB_AVAILABLE = True
-except ImportError:
-    WANDB_AVAILABLE = False
-    print("⚠ wandb not installed. Run: pip install wandb")
 
 from config import Config
 from models import get_model
@@ -264,53 +258,6 @@ def train_model(model_name, train_loader, val_loader, num_classes, device, class
     print(f"Training {model_name}")
     print(f"{'='*70}")
     
-    # ================= W&B INIT =================
-    use_wandb = Config.USE_WANDB and WANDB_AVAILABLE
-    if use_wandb:
-        # Login to wandb (chỉ cần login một lần)
-        try:
-            wandb.login(key=Config.WANDB_API_KEY)
-            print(f"✓ W&B logged in successfully")
-        except Exception as e:
-            print(f"⚠ W&B login failed: {e}")
-            use_wandb = False
-    
-    if use_wandb:
-        # Tạo run name: experiment_name + model_name
-        run_name = f"{Config.EXPERIMENT_NAME}_{model_name}"
-        
-        wandb.init(
-            project=Config.WANDB_PROJECT,
-            entity=Config.WANDB_ENTITY,
-            name=run_name,
-            config={
-                "experiment": Config.EXPERIMENT_NAME,  # Tên experiment
-                "model": model_name,
-                "epochs": Config.NUM_EPOCHS,
-                "batch_size": Config.BATCH_SIZE,
-                "learning_rate": Config.LEARNING_RATE,
-                "optimizer": "Adam",
-                "weight_decay": Config.WEIGHT_DECAY,
-                "scheduler": "ReduceLROnPlateau",
-                "early_stopping_patience": Config.EARLY_STOPPING_PATIENCE,
-                "lr_decay_patience": Config.LR_DECAY_PATIENCE,
-                "lr_decay_factor": Config.LR_DECAY_FACTOR,
-                "image_size": Config.IMAGE_SIZE,
-                "num_workers": Config.NUM_WORKERS,
-                "classifier_config": Config.CLASSIFIER_CONFIG,
-                "dropout_rate": Config.DROPOUT_RATE,
-                "num_classes": num_classes,
-                "random_seed": Config.RANDOM_SEED
-            },
-            reinit=True  # Allow multiple runs in same script
-        )
-        print(f"✓ W&B initialized: {run_name}")
-    else:
-        if not WANDB_AVAILABLE:
-            print("⚠ W&B not available. Install with: pip install wandb")
-        else:
-            print("⚠ W&B disabled in config (USE_WANDB=False)")
-    
     # Create model
     model = get_model(model_name, num_classes, freeze_backbone=False)
     model = model.to(device)
@@ -345,7 +292,7 @@ def train_model(model_name, train_loader, val_loader, num_classes, device, class
         #     dtype=torch.float32
         # ).to(device)
         # print(f"  Class weights: {class_weights.cpu().tolist()}")
-        criterion = nn.CrossEntropyLoss(label_smoothing=Config.label_smoothing)
+        criterion = nn.CrossEntropyLoss(label_smoothing=Config.LABEL_SMOOTHING)
     optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), 
                           lr=Config.LEARNING_RATE,
                           weight_decay=Config.WEIGHT_DECAY)  # L2 regularization
@@ -420,21 +367,6 @@ def train_model(model_name, train_loader, val_loader, num_classes, device, class
         print(f"  Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%")
         print(f"  Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%")
         
-        # ================= W&B LOGGING =================
-        if use_wandb:
-            wandb.log(
-                {
-                    "train/loss": train_loss,
-                    "train/acc": train_acc,
-                    "val/loss": val_loss,
-                    "val/acc": val_acc,
-                    "learning_rate": current_lr,
-                    "epoch": epoch,
-                    "epoch_time": epoch_time
-                },
-                step=epoch
-            )
-        
         # Learning rate scheduler step
         scheduler.step()
         
@@ -478,24 +410,6 @@ def train_model(model_name, train_loader, val_loader, num_classes, device, class
         
         print(f"  Best Checkpoint: Epoch {best_epoch}, Val Loss: {best_val_loss_cp:.4f}")
         print(f"  Test Loss: {test_loss:.4f}, Test Acc: {test_acc:.2f}%")
-    
-    # ================= W&B SUMMARY & FINISH =================
-    if use_wandb:
-        # Log final summary
-        wandb.run.summary["best_val_loss"] = best_val_loss
-        wandb.run.summary["best_epoch"] = checkpoint_manager.best_epoch
-        wandb.run.summary["total_epochs"] = epoch
-        wandb.run.summary["total_checkpoints"] = len(checkpoint_manager.checkpoints)
-        
-        # Log test metrics if available
-        if test_loss is not None and test_acc is not None:
-            wandb.run.summary["test_loss"] = test_loss
-            wandb.run.summary["test_acc"] = test_acc
-            print(f"  ✓ Test metrics logged to W&B")
-        
-        # Finish wandb run
-        wandb.finish()
-        print(f"✓ W&B run finished")
     
     # Determine save directory for training curves
     if save_dir is not None:

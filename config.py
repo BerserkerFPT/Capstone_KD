@@ -30,6 +30,13 @@ class Config:
     LR_DECAY_PATIENCE = 5  # Reduce LR if val_loss doesn't improve for 5 epochs
     LR_DECAY_FACTOR = 0.5  # Multiply LR by this factor when decaying
     
+    # ===================== Sampler Configuration =====================
+    USE_WEIGHTED_SAMPLER = True  # Bật/tắt WeightedRandomSampler (xử lý class imbalance ở data level)
+    
+    # ===================== Cross-Validation Configuration =====================
+    USE_CROSS_VALIDATION = False  # Bật/tắt Cross-Validation (dùng sklearn StratifiedKFold)
+    CV_N_SPLITS = 5              # Số fold cho Cross-Validation
+    
     # ===================== Loss Function Configuration =====================
     # Loss function: 'cross_entropy' or 'poly_focal'
     LOSS_FUNCTION = 'cross_entropy'  # Thay đổi thành 'poly_focal' để sử dụng PolyFocalLoss

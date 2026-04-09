@@ -1,131 +1,123 @@
 # Baseline Research - Pretrained Models Evaluation
 
-Hệ thống đánh giá baseline cho 8 pretrained models với 3 chiến thuật đánh giá khác nhau.
+Pipeline tự động train & evaluate pretrained models cho bài toán image classification.
 
-## 📁 Cấu trúc Project
+## Cấu trúc Project
 
 ```
-Capstone/
-├── config.py              # Cấu hình dataset, training, models
-├── models.py              # Định nghĩa 8 pretrained models với custom classifier
-├── dataset.py             # Data loading, augmentation, và splitting
-├── train.py               # Training với early stopping và checkpoint saving
-├── evaluate.py            # 3 chiến thuật đánh giá và export kết quả
-├── main.py                # Main pipeline để chạy toàn bộ
-├── requirements.txt       # Dependencies
-└── README.md             # Hướng dẫn sử dụng
+├── config.py          # Toàn bộ cấu hình (dataset, training, loss, sampler, CV, ...)
+├── main.py            # Main pipeline - chạy file này
+├── train.py           # Training loop, early stopping, checkpoint management
+├── evaluate.py        # 3 chiến thuật đánh giá + export Excel
+├── models.py          # Pretrained models với custom classifier head
+├── dataset.py         # Data loading, augmentation, WeightedRandomSampler
+├── losses.py          # PolyFocalLoss + class weight computation
+├── visualization.py   # Training curves, dataset statistics
+├── requirements.txt   # Dependencies
+└── results/           # Kết quả tự động lưu theo từng lần chạy (results/1/, results/2/, ...)
 ```
 
-## 🚀 Cài đặt
+## Cài đặt
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## ⚙️ Cấu hình
-
-Mở file `config.py` và thay đổi đường dẫn dataset:
-
-```python
-class Config:
-    # Thay đổi đường dẫn dataset ở đây
-    DATASET_PATH = r"D:\Capstone\MorningaLeaf_Dataset"  
-    # hoặc
-    DATASET_PATH = r"D:\Capstone\TomatoDataset\TomatoDataset"
-```
-
-### Các cấu hình khác:
-
-- **Train/Val/Test split**: Mặc định 70/15/15
-- **Batch size**: 32
-- **Number of epochs**: 50
-- **Learning rate**: 0.001
-- **Learning rate decay**: Giảm 0.5x sau 5 epochs val_loss không cải thiện
-- **Early stopping patience**: 10 epochs
-- **Custom classifier**: [256, 128, 64] với dropout 0.5 (Chỉ cần thêm số vào thì sẽ tự define và chạy)
-
-## 🎯 8 Pretrained Models
-
-1. VGG16
-2. ResNet101
-3. DenseNet121
-4. EfficientNet-B0
-5. ConvNeXt-Tiny
-6. ViT-Base-Patch16-224
-7. Swin-Tiny-Patch4-Window7-224
-8. ConViT-Tiny
-
-**Lưu ý**: Tất cả backbone weights đều được đóng băng (frozen), chỉ train custom classifier.
-
-## 📊 3 Chiến thuật Đánh giá
-
-### Strategy 1: Best Checkpoint
-- Lưu checkpoint có val_loss thấp nhất
-- Đánh giá trên tập test
-
-### Strategy 2: Top-K Average
-- Tìm K checkpoints có val_loss thấp nhất
-- Trung bình trọng số của K checkpoints
-- Đánh giá với K = 2, 3, 4, 5
-
-### Strategy 3: Last-N Average
-- Lấy 10 checkpoints của 10 epoch cuối cùng
-- Trung bình trọng số
-- Đánh giá trên tập test
-
-## 🏃‍♂️ Cách chạy
-
-### Chạy toàn bộ pipeline:
+## Cách chạy
 
 ```bash
 python main.py
 ```
 
-Pipeline sẽ tự động:
-1. Validate cấu hình
-2. Load và split dataset
-3. Train 8 models với early stopping
-4. Đánh giá với 3 strategies
-5. Export kết quả ra Excel
-6. Tạo performance charts
+Pipeline tự động: Validate config → Load dataset → Train từng model → Evaluate 3 strategies → Export Excel + Charts.
 
-### Chạy riêng từng bước:
+Kết quả mỗi lần chạy lưu riêng tại `results/<run_number>/` gồm:
+- `run_config.xlsx` — toàn bộ config của lần chạy
+- `all_models_results.xlsx` — bảng so sánh tất cả model
+- `<model_name>/` — kết quả chi tiết, confusion matrix, training curves
 
-```bash
-# Test dataset loading
-python dataset.py
+## Cấu hình (`config.py`)
 
-# Test một model
-python train.py
+Mở `config.py`, chỉnh các biến cần thiết:
 
-# Test models
-python models.py
+| Nhóm | Biến quan trọng | Mô tả |
+|------|-----------------|-------|
+| **Dataset** | `DATASET_PATH` | Đường dẫn tới thư mục dataset (mỗi class = 1 subfolder) |
+| | `TRAIN_RATIO / VAL_RATIO / TEST_RATIO` | Tỉ lệ chia data (mặc định 70/15/15) |
+| **Model** | `MODELS` | List model cần train (comment/uncomment để chọn) |
+| | `CLASSIFIER_CONFIG` | Hidden layers của classifier head, VD: `[512]` |
+| | `DROPOUT_RATE` | Dropout rate cho classifier |
+| **Training** | `BATCH_SIZE`, `NUM_EPOCHS`, `LEARNING_RATE` | Hyperparameters cơ bản |
+| | `WEIGHT_DECAY` | L2 regularization |
+| | `EARLY_STOPPING_PATIENCE` | Dừng sớm nếu val_loss không giảm sau N epochs |
+| **Loss** | `LOSS_FUNCTION` | `'cross_entropy'` hoặc `'poly_focal'` |
+| | `label_smoothing` | Label smoothing (chỉ cho CrossEntropy) |
+| | `FOCAL_GAMMA`, `POLY_EPSILON` | Params cho PolyFocalLoss |
+| **Sampler** | `USE_WEIGHTED_SAMPLER` | `True/False` — bật WeightedRandomSampler xử lý class imbalance |
+| **Cross-Val** | `USE_CROSS_VALIDATION` | `True/False` — bật Stratified K-Fold CV |
+| | `CV_N_SPLITS` | Số fold (mặc định 5) |
+| **Output** | `AUTO_DELETE_CHECKPOINTS` | Tự xóa checkpoints sau evaluate để tiết kiệm disk |
+
+## Models hỗ trợ
+
+Uncomment trong `Config.MODELS`:
+
+```python
+MODELS = [
+    'vgg16',
+    'resnet18',
+    'resnet101',
+    'mobilenet_v2',
+    'densenet121',
+    'efficientnet_b0',
+    'vit_base_patch16_224',
+]
 ```
 
-## 📈 Kết quả
+## 3 Chiến thuật Đánh giá
 
-Sau khi chạy xong, kết quả sẽ được lưu trong thư mục `results/`:
+| Strategy | Mô tả |
+|----------|-------|
+| **Best Checkpoint** | Checkpoint có val_loss thấp nhất |
+| **Top-K Average** | Trung bình weights của K checkpoint tốt nhất (K = 2,3,4,5) |
+| **Last-N Average** | Trung bình weights của N epoch cuối cùng |
 
-```
-results/
-├── baseline_results_YYYYMMDD_HHMMSS.xlsx       # Kết quả 48 experiments (8 models × 6 strategies)
-├── performance_comparison.png                   # Chart tổng hợp so sánh toàn bộ
-└── experiment_info_YYYYMMDD_HHMMSS.json        # Thông tin experiment
-```
+## Cross-Validation
 
-### Kết quả bao gồm 48 experiments:
-- 8 models × 6 strategies:
-  - Strategy 1: Best checkpoint
-  - Strategy 2: Top-2, Top-3, Top-4, Top-5 average
-  - Strategy 3: Last 10 epochs average
+Khi `USE_CROSS_VALIDATION = True`:
+- Data `train + val` gộp thành CV pool
+- `test` giữ nguyên làm hold-out
+- Dùng `StratifiedKFold` (sklearn) chia K fold, giữ tỉ lệ class
+- Kết quả cuối: **mean ± std** qua K fold → lưu vào `cv_summary_results.xlsx`
 
-### Metrics được đánh giá:
+## Metrics
 
-- Accuracy (%)
-- Precision (%)
-- Recall (%)
-- F1-Score (%)
-- AUC (%)
+Tất cả metrics dùng **Macro averaging** (trung bình đều giữa các class):
+
+| Metric | Cách tính |
+|--------|-----------|
+| Accuracy | Overall correct / total |
+| Precision | Macro average |
+| Recall | Macro average |
+| F1-Score | Macro average |
+| AUC | Macro average, one-vs-rest |
+
+Kết quả bao gồm cả **per-class breakdown** (Precision, Recall, F1, Specificity, AUC, Support).
+
+## Reproduce kết quả
+
+1. Set `RANDOM_SEED = 42` (mặc định) — đảm bảo cùng data split, cùng weight init
+2. Đặt đúng `DATASET_PATH`
+3. Chọn model trong `MODELS`
+4. Chạy `python main.py`
+
+Seed cố định cho: `random`, `numpy`, `torch`, `CUDA`, `cudnn.deterministic`.
+
+## Ghi chú
+
+- **WRS + Focal Loss đồng thời**: Không lỗi code, nhưng có thể double-correct class imbalance. Cân nhắc chỉ bật 1 trong 2.
+- **LR Scheduler**: Linear Warmup → Cosine Annealing
+- **Data Augmentation** (chỉ train): RandomFlip, RandomRotation(90°), ColorJitter
 
 ## 💾 Checkpoints
 
