@@ -343,6 +343,8 @@ def main():
         )
         
         all_fold_results = {}  # {model_name: [fold_results]}
+        # Track best strategy per fold per model: {model_name: [(fold_idx, best_strategy_name, best_f1)]}
+        best_per_fold = {}
         
         for fold_idx, (train_idx, test_idx) in enumerate(skf.split(all_paths, all_labels), 1):
             print(f"\n{'='*70}")
@@ -402,6 +404,46 @@ def main():
                         all_fold_results[model_name] = []
                     all_fold_results[model_name].append(results)
                     
+                    # === Tìm strategy có F1 cao nhất trong fold này ===
+                    best_strategy_name = None
+                    best_f1 = -1.0
+                    for strategy_name, result in results.items():
+                        f1_val = result['metrics']['F1-Score (%)']
+                        if f1_val > best_f1:
+                            best_f1 = f1_val
+                            best_strategy_name = strategy_name
+                    
+                    print(f"\n  🏆 Fold {fold_idx} - {model_name}: Best strategy = {best_strategy_name} (F1={best_f1:.2f}%)")
+                    
+                    # Lưu thông tin best strategy per fold
+                    if model_name not in best_per_fold:
+                        best_per_fold[model_name] = []
+                    best_per_fold[model_name].append({
+                        'fold': fold_idx,
+                        'best_strategy': best_strategy_name,
+                        'best_f1': best_f1,
+                        'best_metrics': results[best_strategy_name]['metrics']
+                    })
+                    
+                    # === Rename/copy checkpoint tốt nhất với suffix _FoldN ===
+                    # Tìm file checkpoint tương ứng với best strategy
+                    safe_strategy = best_strategy_name.replace(' ', '_').replace('(', '').replace(')', '').replace('=', '')
+                    # Tìm file checkpoint trong strategy_ckpt_dir
+                    if os.path.exists(strategy_ckpt_dir):
+                        import glob
+                        # Tìm file checkpoint phù hợp với strategy name
+                        ckpt_files = glob.glob(os.path.join(strategy_ckpt_dir, f'Strategy_*.pth'))
+                        for ckpt_file in ckpt_files:
+                            ckpt_basename = os.path.basename(ckpt_file)
+                            # Copy file với suffix _FoldN
+                            new_name = ckpt_basename.replace('.pth', f'_Fold{fold_idx}.pth')
+                            new_path = os.path.join(strategy_ckpt_dir, new_name)
+                            # Chỉ rename checkpoint tốt nhất
+                            if safe_strategy in ckpt_basename.replace(' ', '_').replace('(', '').replace(')', '').replace('=', ''):
+                                import shutil as shutil_copy
+                                shutil_copy.copy2(ckpt_file, new_path)
+                                print(f"    ✓ Best checkpoint saved as: {new_name}")
+                    
                     save_model_results(model_name, results, fold_folder)
                     
                     if Config.AUTO_DELETE_CHECKPOINTS:
@@ -415,14 +457,14 @@ def main():
                     traceback.print_exc()
                     continue
         
-        # Tổng hợp kết quả CV
+        # ===================== Tổng hợp kết quả CV =====================
         print(f"\n{'='*70}")
         print(f" CROSS-VALIDATION SUMMARY ({Config.CV_N_SPLITS}-Fold)")
         print(f"{'='*70}")
         
-        cv_summary_rows = []
+        # === Sheet 1: Mean ± Std cho TẤT CẢ strategies (giữ nguyên logic cũ) ===
+        cv_all_strategies_rows = []
         for model_name, fold_results_list in all_fold_results.items():
-            # Lấy Strategy 1 (best checkpoint) từ mỗi fold
             for strategy_name in fold_results_list[0].keys():
                 fold_metrics = []
                 for fold_res in fold_results_list:
@@ -437,13 +479,69 @@ def main():
                         avg_metrics[f"{key} (std)"] = np.std(values)
                     
                     row = {'Model': model_name, 'Strategy': strategy_name, **avg_metrics}
-                    cv_summary_rows.append(row)
+                    cv_all_strategies_rows.append(row)
         
-        cv_df = pd.DataFrame(cv_summary_rows)
+        cv_all_df = pd.DataFrame(cv_all_strategies_rows)
+        
+        # === Sheet 2: Mean ± Std dựa trên 5 best checkpoints (1 per fold, strategy có F1 cao nhất) ===
+        cv_best_rows = []
+        for model_name, fold_info_list in best_per_fold.items():
+            # Lấy metrics từ best strategy của mỗi fold
+            best_fold_metrics = [info['best_metrics'] for info in fold_info_list]
+            
+            if best_fold_metrics:
+                avg_metrics = {}
+                for key in best_fold_metrics[0].keys():
+                    values = [m[key] for m in best_fold_metrics]
+                    avg_metrics[f"{key} (mean)"] = np.mean(values)
+                    avg_metrics[f"{key} (std)"] = np.std(values)
+                    # Thêm format mean ± std
+                    if key != 'Test Loss':
+                        avg_metrics[f"{key} (mean ± std)"] = f"{np.mean(values):.2f} ± {np.std(values):.2f}"
+                    else:
+                        avg_metrics[f"{key} (mean ± std)"] = f"{np.mean(values):.4f} ± {np.std(values):.4f}"
+                
+                row = {'Model': model_name, 'Strategy': 'Best per Fold (highest F1)', **avg_metrics}
+                cv_best_rows.append(row)
+        
+        cv_best_df = pd.DataFrame(cv_best_rows)
+        
+        # === Sheet 3: Chi tiết best strategy cho từng fold ===
+        cv_detail_rows = []
+        for model_name, fold_info_list in best_per_fold.items():
+            for info in fold_info_list:
+                row = {
+                    'Model': model_name,
+                    'Fold': info['fold'],
+                    'Best Strategy': info['best_strategy'],
+                    'F1-Score (%)': info['best_f1'],
+                    **{k: v for k, v in info['best_metrics'].items() if k != 'F1-Score (%)'}
+                }
+                cv_detail_rows.append(row)
+        
+        cv_detail_df = pd.DataFrame(cv_detail_rows)
+        
+        # === Xuất Excel với nhiều sheets ===
         cv_excel_path = os.path.join(run_folder, 'cv_summary_results.xlsx')
-        cv_df.to_excel(cv_excel_path, index=False)
+        with pd.ExcelWriter(cv_excel_path, engine='openpyxl') as writer:
+            cv_best_df.to_excel(writer, sheet_name='Best per Fold Summary', index=False)
+            cv_detail_df.to_excel(writer, sheet_name='Fold Details (Best Strategy)', index=False)
+            cv_all_df.to_excel(writer, sheet_name='All Strategies Summary', index=False)
+        
         print(f"\n✓ CV Summary saved to: {cv_excel_path}")
-        print(cv_df.to_string(index=False))
+        print(f"  - Sheet 'Best per Fold Summary': Mean ± Std từ 5 best checkpoints")
+        print(f"  - Sheet 'Fold Details (Best Strategy)': Strategy nào cao nhất mỗi fold")
+        print(f"  - Sheet 'All Strategies Summary': Mean ± Std cho tất cả strategies")
+        
+        print(f"\n{'='*70}")
+        print(f" BEST STRATEGY PER FOLD:")
+        print(f"{'='*70}")
+        print(cv_detail_df.to_string(index=False))
+        
+        print(f"\n{'='*70}")
+        print(f" BEST PER FOLD SUMMARY (Mean ± Std):")
+        print(f"{'='*70}")
+        print(cv_best_df.to_string(index=False))
         
         print(f"\n{'='*70}")
         print(f" CROSS-VALIDATION COMPLETED!")

@@ -61,7 +61,6 @@ class CheckpointManager:
         checkpoint = {
             'epoch': epoch,
             'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
             'val_loss': val_loss
         }
         
