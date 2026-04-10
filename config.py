@@ -93,6 +93,13 @@ class Config:
     USE_CROSS_VALIDATION = False   # Bật/tắt Pure K-Fold Cross-Validation (sklearn StratifiedKFold)
     CV_N_SPLITS = 5                # Số fold cho Cross-Validation
 
+    # Per-fold teacher checkpoints for Potato dataset (imbalanced 1:10)
+    # Khi chạy CV cho Potato: mỗi fold dùng 1 teacher checkpoint tương ứng
+    # Teacher fold i test trên cùng fold test với student fold i
+    # Set None nếu dùng 1 teacher checkpoint chung (TEACHER_CHECKPOINT) cho tất cả fold
+    # Example: ["/path/to/fold1_best.pth", "/path/to/fold2_best.pth", ..., "/path/to/fold5_best.pth"]
+    CV_TEACHER_CHECKPOINTS = None  # List[str] | None — 1 checkpoint per fold, theo thứ tự fold
+
     # ===================== Weighted Random Sampler =====================
     USE_WEIGHTED_SAMPLER = False   # Use inverse-frequency weighted sampling for imbalanced data
 
