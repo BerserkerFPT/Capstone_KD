@@ -233,7 +233,7 @@ def validate(model, val_loader, criterion, device):
     return epoch_loss, epoch_acc
 
 
-def train_model(model_name, train_loader, val_loader, num_classes, device, class_names=None, test_loader=None, train_labels=None, save_dir=None):
+def train_model(model_name, train_loader, val_loader, num_classes, device, class_names=None, test_loader=None, train_labels=None, save_dir=None, checkpoints_dir=None):
     """
     Train a single model
 
@@ -247,6 +247,8 @@ def train_model(model_name, train_loader, val_loader, num_classes, device, class
         test_loader: Test dataloader (optional, for final test evaluation)
         train_labels: List of training labels (optional, for computing class weights)
         save_dir: Directory to save training curves (per-run folder). If None, uses Config.RESULTS_DIR
+        checkpoints_dir: Base directory for CheckpointManager. If None, uses Config.CHECKPOINTS_DIR.
+                         Pass a fold-specific path in CV mode to isolate checkpoints per fold.
 
     Returns:
         checkpoint_manager: CheckpointManager object
@@ -324,7 +326,7 @@ def train_model(model_name, train_loader, val_loader, num_classes, device, class
     # Early stopping and checkpoint manager
     early_stopping = EarlyStopping(patience=Config.EARLY_STOPPING_PATIENCE)
     checkpoint_manager = CheckpointManager(
-        Config.CHECKPOINTS_DIR, 
+        checkpoints_dir if checkpoints_dir is not None else Config.CHECKPOINTS_DIR,
         model_name,
         keep_last_n=Config.KEEP_LAST_N_CHECKPOINTS,
         keep_top_k=Config.KEEP_TOP_K_CHECKPOINTS

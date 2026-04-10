@@ -40,7 +40,7 @@ class Config:
     # ===================== Loss Function Configuration =====================
     # Loss function: 'cross_entropy' or 'poly_focal'
     LOSS_FUNCTION = 'cross_entropy'  # Thay đổi thành 'poly_focal' để sử dụng PolyFocalLoss
-    label_smoothing = 0.15  # Label smoothing factor (only used for CrossEntropyLoss)
+    LABEL_SMOOTHING = 0.15  # Label smoothing factor (only used for CrossEntropyLoss)
     # PolyFocalLoss parameters (only used when LOSS_FUNCTION = 'poly_focal')
     FOCAL_GAMMA = 2.0       # Focusing parameter: higher = more focus on hard examples
     POLY_EPSILON = 1.0      # Poly coefficient: boosts gradient for ambiguous samples
