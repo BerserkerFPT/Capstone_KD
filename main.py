@@ -20,39 +20,12 @@ from PCA_projector import PCAttentionProjector
 from GWLinear_projector import GWLinearProjector
 from loss_functions import ProjectionLoss, LogitsKDLoss, DIST, PolyFocalLoss, compute_class_weights
 from dataset import DatasetHandler, set_seed
-from visualization import plot_training_curves, plot_dwa_curves
+from visualization import plot_training_curves
 torch.use_deterministic_algorithms(True, warn_only=True)
 
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
-class DynamicWeightAveraging:
-    def __init__(self, num_tasks, temperature=2.0, initial_lambdas=None):
-        self.num_tasks = num_tasks
-        self.temperature = temperature
-        self.loss_history = []
-        self.initial_lambdas = initial_lambdas  # Custom weights for first 2 epochs
-
-    def get_lambdas(self):
-        t = len(self.loss_history) + 1
-        if t <= 2:
-            if self.initial_lambdas is not None:
-                return self.initial_lambdas.clone()
-            return torch.ones(self.num_tasks, dtype=torch.float32)
-
-        L_t_minus_1 = self.loss_history[-1]
-        L_t_minus_2 = self.loss_history[-2]
-        
-        w = L_t_minus_1 / (L_t_minus_2 + 1e-8)
-        lambdas = self.num_tasks * torch.nn.functional.softmax(w / self.temperature, dim=0)
-        return lambdas
-
-    def update_loss_history(self, epoch_losses):
-        if not isinstance(epoch_losses, torch.Tensor):
-            epoch_losses = torch.tensor(epoch_losses, dtype=torch.float32)
-        assert epoch_losses.size(0) == self.num_tasks
-        self.loss_history.append(epoch_losses.clone().detach())
-        if len(self.loss_history) > 2:
-            self.loss_history.pop(0)
+# DynamicWeightAveraging removed — using fixed static loss weights
 
 
 class StudentWithHead(nn.Module):
@@ -269,7 +242,7 @@ class DistillationPipeline:
         # warmup_epochs_teacher=5,
         device="cuda",
         save_dir="checkpoints",
-        dwa_init_lambdas=None,  # list of 5 initial lambda values for DWA
+        loss_lambdas=None,  # list of 5 static loss weights [CE, Proj1, Proj2, Logits, DIST]
         patience=15,  # early stopping patience
         start_factor_student=1e-8,
         # start_factor_teacher=1e-8,  # warmup start factor
@@ -297,10 +270,6 @@ class DistillationPipeline:
         use_proj2=True,   # L_proj2 GWLinear projection loss
         use_logits=True,  # L_logits Hinton KD logits loss
         use_dist=True,    # L_dist DIST relational loss
-        # --- DWA hyperparameters ---
-        dwa_temperature=2.0,   # Temperature T for DWA softmax
-        dwa_num_tasks=5,       # Auto-computed from active losses in Config
-        use_dwa=True,          # Toggle DWA on/off
         # --- Random seed ---
         random_seed=42,
         # --- Weighted sampler & Focal loss ---
@@ -326,7 +295,6 @@ class DistillationPipeline:
         self.warmup_epochs_student = warmup_epochs_student
         # self.warmup_epochs_teacher = warmup_epochs_teacher
         self.save_dir = save_dir
-        self.dwa_init_lambdas = dwa_init_lambdas
         self.temperature = temperature
         self.patience = patience
         self.start_factor_student = start_factor_student
@@ -341,10 +309,13 @@ class DistillationPipeline:
         self.use_proj2  = use_proj2 and use_projection  # proj2 requires use_projection
         self.use_logits = use_logits
         self.use_dist   = use_dist
-        # --- DWA hyperparameters ---
-        self.dwa_temperature = dwa_temperature
-        self.dwa_num_tasks   = dwa_num_tasks
-        self.use_dwa         = use_dwa
+        # --- Fixed static loss weights ---
+        _default_lambdas = [1.0, 1.0, 1.0, 1.0, 1.0]
+        _raw = loss_lambdas if loss_lambdas is not None else _default_lambdas
+        _flags = [use_ce, use_proj1 and use_projection, use_proj2 and use_projection, use_logits, use_dist]
+        _active = [lam for flag, lam in zip(_flags, _raw) if flag]
+        self.loss_weights = torch.tensor(_active, dtype=torch.float32)
+        self.loss_lambdas_raw = _raw  # full 5-element list for config export [CE, Proj1, Proj2, Logits, DIST]
         # --- Weighted sampler & Focal loss ---
         self.use_weighted_sampler = use_weighted_sampler
         self.use_focal_loss = use_focal_loss
@@ -505,16 +476,12 @@ class DistillationPipeline:
             {"Group": "Training",  "Parameter": "eta_min_student",      "Value": self.eta_min_student},
             {"Group": "Training",  "Parameter": "patience",             "Value": self.patience},
             {"Group": "Training",  "Parameter": "label_smoothing",      "Value": self.label_smoothing},
-            # ── Loss weights (initial λ) ──
-            {"Group": "Loss Weights", "Parameter": "dwa_init_lambda_CE",     "Value": self.dwa_init_lambdas[0] if self.dwa_init_lambdas else 1.0},
-            {"Group": "Loss Weights", "Parameter": "dwa_init_lambda_Proj1",  "Value": self.dwa_init_lambdas[1] if self.dwa_init_lambdas else 1.0},
-            {"Group": "Loss Weights", "Parameter": "dwa_init_lambda_Proj2",  "Value": self.dwa_init_lambdas[2] if self.dwa_init_lambdas else 1.0},
-            {"Group": "Loss Weights", "Parameter": "dwa_init_lambda_Logits", "Value": self.dwa_init_lambdas[3] if self.dwa_init_lambdas else 1.0},
-            {"Group": "Loss Weights", "Parameter": "dwa_init_lambda_DIST",   "Value": self.dwa_init_lambdas[4] if self.dwa_init_lambdas else 1.0},
-            # ── DWA ──
-            {"Group": "DWA",       "Parameter": "use_dwa",              "Value": self.use_dwa},
-            {"Group": "DWA",       "Parameter": "dwa_temperature",      "Value": self.dwa_temperature},
-            {"Group": "DWA",       "Parameter": "dwa_num_tasks",        "Value": self.dwa_num_tasks},
+            # ── Loss weights (static λ) ──
+            {"Group": "Loss Weights", "Parameter": "lambda_CE",     "Value": self.loss_lambdas_raw[0]},
+            {"Group": "Loss Weights", "Parameter": "lambda_Proj1",  "Value": self.loss_lambdas_raw[1]},
+            {"Group": "Loss Weights", "Parameter": "lambda_Proj2",  "Value": self.loss_lambdas_raw[2]},
+            {"Group": "Loss Weights", "Parameter": "lambda_Logits", "Value": self.loss_lambdas_raw[3]},
+            {"Group": "Loss Weights", "Parameter": "lambda_DIST",   "Value": self.loss_lambdas_raw[4]},
             # ── Logits KD ──
             {"Group": "KD",        "Parameter": "temperature (Hinton)", "Value": self.temperature},
             # ── DIST ──
@@ -610,14 +577,10 @@ class DistillationPipeline:
         
         return scheduler_student
     
-    def train_one_epoch(self, epoch, current_lambdas=None):
+    def train_one_epoch(self, epoch):
         """Train for one epoch."""
-        # Build ordered list of active losses (same order DWA tracks them)
-        # Order: [CE?, Proj1?, Proj2?, Logits?, DIST?]
-        if current_lambdas is None:
-            # Fallback: equal weights for all active losses
-            current_lambdas = torch.ones(self.dwa_num_tasks)
-        current_lambdas = current_lambdas.to(self.device)
+        # Use fixed static loss weights (no dynamic adjustment)
+        current_lambdas = self.loss_weights.to(self.device)
 
         self.student.train()
         if self.use_projection:
@@ -743,7 +706,7 @@ class DistillationPipeline:
 
         # Rebuild λ* for weighted metrics
         _idx = 0
-        _lce  = (_lam := current_lambdas[_idx].item() if self.use_ce     else 0.0); _idx += int(self.use_ce)
+        _lce  = (current_lambdas[_idx].item() if self.use_ce     else 0.0); _idx += int(self.use_ce)
         _lp1  = (current_lambdas[_idx].item() if self.use_proj1  else 0.0); _idx += int(self.use_proj1)
         _lp2  = (current_lambdas[_idx].item() if self.use_proj2  else 0.0); _idx += int(self.use_proj2)
         _llg  = (current_lambdas[_idx].item() if self.use_logits else 0.0); _idx += int(self.use_logits)
@@ -763,21 +726,18 @@ class DistillationPipeline:
             "l3_weighted":  avg_raw_l3    * _llg,
             "dist_weighted":avg_raw_dist  * _lds,
             "accuracy":     accuracy,
-            "lambda_vals":  current_lambdas.cpu().tolist(),  # raw DWA lambdas
         }
     
     
     @torch.no_grad()
-    def validate(self, loader, desc="Val", class_names=None, current_lambdas=None):
+    def validate(self, loader, desc="Val", class_names=None):
         """Validate on given loader using total KD loss (not just CE)"""
         self.student.eval()
         if self.use_projection:
             self.pca_projector.eval()
             self.gl_projector.eval()
 
-        if current_lambdas is None:
-            current_lambdas = torch.ones(self.dwa_num_tasks)
-        current_lambdas = current_lambdas.to(self.device)
+        current_lambdas = self.loss_weights.to(self.device)
 
         total_loss = 0.0
         correct = 0
@@ -956,29 +916,6 @@ class DistillationPipeline:
         best_val_loss = float('inf')  # Lower is better
         epochs_no_improve = 0  # Early stopping counter
 
-        # Khởi tạo DWA với num_tasks và temperature từ config
-        # (dwa_num_tasks được auto-tính từ các USE_* flags trong Config)
-        # Build initial_lambdas from config (only for active losses)
-        init_lambdas = None
-        if self.dwa_init_lambdas is not None:
-            all_lambdas = self.dwa_init_lambdas  # [CE, Proj1, Proj2, Logits, DIST]
-            active = []
-            flags = [self.use_ce, self.use_proj1, self.use_proj2, self.use_logits, self.use_dist]
-            for flag, lam in zip(flags, all_lambdas):
-                if flag:
-                    active.append(lam)
-            init_lambdas = torch.tensor(active, dtype=torch.float32)
-        dwa = DynamicWeightAveraging(
-            num_tasks=self.dwa_num_tasks,
-            temperature=self.dwa_temperature,
-            initial_lambdas=init_lambdas
-        )
-
-        if not self.use_dwa:
-            print("[DWA] ⚠️  DWA is DISABLED — using fixed initial lambdas for all epochs.")
-        else:
-            print("[DWA] ✅ DWA is ENABLED — weights will be adjusted dynamically.")
-
         history = {
             "train_loss": [],
             "val_loss":   [],
@@ -990,11 +927,6 @@ class DistillationPipeline:
             "raw_l2":     [],
             "raw_l3":     [],
             "raw_dist":   [],
-            "lambda_ce":  [],
-            "lambda_l1":  [],
-            "lambda_l2":  [],
-            "lambda_l3":  [],
-            "lambda_dist":[],
             "epoch_time": []
         }
         training_start_time = time.time()
@@ -1009,38 +941,12 @@ class DistillationPipeline:
         print("="*60)
 
         for epoch in range(start_epoch, self.epochs):
-            # Lấy lambda động cho epoch hiện tại
-            if self.use_dwa:
-                current_lambdas = dwa.get_lambdas()
-            else:
-                # Fixed lambdas: always use initial values
-                current_lambdas = init_lambdas.clone() if init_lambdas is not None else torch.ones(self.dwa_num_tasks)
-
-            # Log DWA lambdas theo active losses
-            active_names  = (["CE"]     if self.use_ce     else []) + \
-                            (["Proj1"]  if self.use_proj1  else []) + \
-                            (["Proj2"]  if self.use_proj2  else []) + \
-                            (["Logits"] if self.use_logits else []) + \
-                            (["DIST"]   if self.use_dist   else [])
-            lam_str = ", ".join(f"{n}={current_lambdas[i].item():.4f}"
-                                for i, n in enumerate(active_names))
-            print(f"\n[DWA] Epoch {epoch+1} lambdas: {lam_str}")
-
             # Train
             epoch_start_time = time.time()
-            train_metrics = self.train_one_epoch(epoch, current_lambdas)
+            train_metrics = self.train_one_epoch(epoch)
 
-            # Cập nhật DWA: chỉ đưa losses của các tasks đang active
-            active_losses = []
-            if self.use_ce:     active_losses.append(train_metrics["ce_loss_s"])
-            if self.use_proj1:  active_losses.append(train_metrics["raw_l1"])
-            if self.use_proj2:  active_losses.append(train_metrics["raw_l2"])
-            if self.use_logits: active_losses.append(train_metrics["raw_l3"])
-            if self.use_dist:   active_losses.append(train_metrics["raw_dist"])
-            dwa.update_loss_history(torch.tensor(active_losses))
-
-            # Validate (use current_lambdas for consistent val loss calculation)
-            val_metrics = self.validate(self.val_loader, desc="Val", current_lambdas=current_lambdas)
+            # Validate
+            val_metrics = self.validate(self.val_loader, desc="Val")
             epoch_elapsed = time.time() - epoch_start_time
 
             # Get current LR (before step)
@@ -1060,18 +966,6 @@ class DistillationPipeline:
             history["raw_l3"].append(train_metrics["raw_l3"])
             history["raw_dist"].append(train_metrics["raw_dist"])
             history["epoch_time"].append(round(epoch_elapsed, 2))
-
-            # Lambda history: map DWA slots → fixed 5-key history
-            lam_idx = 0
-            history["lambda_ce"].append(current_lambdas[lam_idx].item() if self.use_ce else 0.0)
-            lam_idx += int(self.use_ce)
-            history["lambda_l1"].append(current_lambdas[lam_idx].item() if self.use_proj1 else 0.0)
-            lam_idx += int(self.use_proj1)
-            history["lambda_l2"].append(current_lambdas[lam_idx].item() if self.use_proj2 else 0.0)
-            lam_idx += int(self.use_proj2)
-            history["lambda_l3"].append(current_lambdas[lam_idx].item() if self.use_logits else 0.0)
-            lam_idx += int(self.use_logits)
-            history["lambda_dist"].append(current_lambdas[lam_idx].item() if self.use_dist else 0.0)
 
             # Step scheduler (epoch-level)
             self.scheduler_student.step()
@@ -1114,14 +1008,18 @@ class DistillationPipeline:
 
         # ===== Plot learning curves =====
         plot_training_curves(history, self.save_dir)
-        plot_dwa_curves(history, self.save_dir)
 
         # ===== Evaluate all 3 strategies =====
         all_results = self.evaluate_all_strategies(history)
-        
+
         # ===== Cleanup training checkpoints, keep only strategy files =====
         self._cleanup_training_checkpoints()
-        
+
+        # ===== Keep only best-F1 strategy checkpoint =====
+        from config import Config as _Cfg
+        if getattr(_Cfg, 'KEEP_BEST_F1_CHECKPOINT_ONLY', False):
+            self._keep_best_f1_checkpoint()
+
         return all_results
 
     def _export_metrics_to_excel(self, metrics, class_names):
@@ -1387,6 +1285,9 @@ class DistillationPipeline:
         # Export all results to Excel
         self._export_all_strategies_to_excel(all_results, class_names, history)
 
+        # Store for _keep_best_f1_checkpoint()
+        self._last_all_results = all_results
+
         # Print summary table
         print("\n" + "="*70)
         print("📊 SUMMARY OF ALL STRATEGIES")
@@ -1446,33 +1347,7 @@ class DistillationPipeline:
                 df_per_class = pd.DataFrame(per_class_rows)
                 df_per_class.to_excel(writer, sheet_name="Per-Class Metrics", index=False)
                 
-            # ===== Sheet 3: Lambda weight at lowest val_loss (Strategy 1) =====
-            if history:
-                best = self.checkpoint_manager.get_best_checkpoint()
-                if best is not None:
-                    best_epoch = best[0]
-                    idx = best_epoch - 1
-                    
-                    if idx >= 0 and idx < len(history.get("lambda_ce", [])):
-                        lambda_dict = {
-                            "Strategy": "Strategy 1 (Best)",
-                            "Best Epoch": best_epoch,
-                        }
-                        if self.use_ce:
-                            lambda_dict["Lambda_CE"] = round(history["lambda_ce"][idx], 4)
-                        if self.use_proj1:
-                            lambda_dict["Lambda_Proj1"] = round(history["lambda_l1"][idx], 4)
-                        if self.use_proj2:
-                            lambda_dict["Lambda_Proj2"] = round(history["lambda_l2"][idx], 4)
-                        if self.use_logits:
-                            lambda_dict["Lambda_Logits"] = round(history["lambda_l3"][idx], 4)
-                        if self.use_dist:
-                            lambda_dict["Lambda_DIST"] = round(history["lambda_dist"][idx], 4)
-
-                        df_lambdas = pd.DataFrame([lambda_dict])
-                        df_lambdas.to_excel(writer, sheet_name="Lambda weight", index=False)
-
-            # ===== Sheet 4: Training Time =====
+            # ===== Sheet 3: Training Time =====
             if history and "epoch_time" in history:
                 epoch_times = history["epoch_time"]
                 total_time = history.get("total_training_time", sum(epoch_times))
@@ -1497,23 +1372,33 @@ class DistillationPipeline:
 
     def _cleanup_training_checkpoints(self):
         """
-        Xóa tất cả checkpoint training (epoch_*.pth, best.pth, latest.pth, checkpoint_info.json)
-        sau khi đã evaluate xong. Chỉ giữ lại folder saved_checkpoints/ chứa strategy files.
+        Xóa tất cả checkpoint training sau khi đã evaluate xong.
+        Chỉ giữ lại folder saved_checkpoints/ chứa 6 strategy files
+        (Strategy 1×1 + Strategy 2×4 + Strategy 3×1).
         """
         print("\n🧹 Cleaning up training checkpoints...")
         kept = 0
         removed = 0
-        saved_cp_dir = os.path.join(self.save_dir, 'saved_checkpoints')
+
+        # Tên các file training cần xóa (không phải strategy files)
+        _TRAINING_FILES = {
+            'best.pth', 'latest.pth',
+            'best_pca_projector.pth', 'best_gl_projector.pth',
+            'latest_pca_projector.pth', 'latest_gl_projector.pth',
+            'checkpoint_info.json',
+        }
 
         for fname in os.listdir(self.save_dir):
             fpath = os.path.join(self.save_dir, fname)
-            # Skip the saved_checkpoints directory and the Excel results
+            # Bỏ qua thư mục con (saved_checkpoints/)
             if os.path.isdir(fpath):
                 continue
-            if fname.endswith('.xlsx') or fname.endswith('.csv'):
+            # Giữ lại Excel / CSV
+            if fname.endswith('.xlsx') or fname.endswith('.csv') or fname.endswith('.png'):
                 kept += 1
                 continue
-            if (fname.startswith('epoch_') and fname.endswith('.pth')) or fname == 'checkpoint_info.json':
+            # Xóa epoch checkpoints và các training files đã biết
+            if (fname.startswith('epoch_') and fname.endswith('.pth')) or fname in _TRAINING_FILES:
                 try:
                     os.remove(fpath)
                     removed += 1
@@ -1523,13 +1408,77 @@ class DistillationPipeline:
                 kept += 1
 
         # Count strategy files kept
+        saved_cp_dir = os.path.join(self.save_dir, 'saved_checkpoints')
         strategy_files = 0
         if os.path.isdir(saved_cp_dir):
             strategy_files = len([f for f in os.listdir(saved_cp_dir) if f.endswith('.pth')])
 
         print(f"   Removed {removed} training checkpoint files")
         print(f"   Kept {strategy_files} strategy checkpoint files in saved_checkpoints/")
-        print(f"   Kept {kept} other files (Excel, etc.)")
+        print(f"   Kept {kept} other files (Excel, PNG, etc.)")
+
+    def _keep_best_f1_checkpoint(self):
+        """
+        Sau khi evaluate xong tất cả strategies, chỉ giữ lại 1 file
+        trong saved_checkpoints/ của strategy có F1-Score cao nhất.
+        Xóa các file .pth còn lại.
+        Phải được gọi sau _cleanup_training_checkpoints() và sau khi
+        all_results đã được set (truyền vào từ train()).
+        """
+        saved_cp_dir = os.path.join(self.save_dir, 'saved_checkpoints')
+        if not os.path.isdir(saved_cp_dir):
+            return
+
+        pth_files = [f for f in os.listdir(saved_cp_dir) if f.endswith('.pth')]
+        if not pth_files:
+            return
+
+        all_results = getattr(self, '_last_all_results', None)
+        if not all_results:
+            print("   ⚠ No strategy results found — skipping best-F1 checkpoint cleanup")
+            return
+
+        # Tìm strategy có F1 cao nhất
+        best_strategy = max(all_results.keys(), key=lambda s: all_results[s].get('F1-Score (%)', 0.0))
+        best_f1 = all_results[best_strategy].get('F1-Score (%)', 0.0)
+
+        # Map strategy name → filename prefix
+        def _to_prefix(name):
+            if 'Strategy 1' in name:
+                return 'strategy1_'
+            if 'Top-2' in name:
+                return 'strategy2_top_2_'
+            if 'Top-3' in name:
+                return 'strategy2_top_3_'
+            if 'Top-4' in name:
+                return 'strategy2_top_4_'
+            if 'Top-5' in name:
+                return 'strategy2_top_5_'
+            if 'Strategy 3' in name or 'Last' in name:
+                return 'strategy3_'
+            return None
+
+        best_prefix = _to_prefix(best_strategy)
+        if best_prefix is None:
+            print(f"   ⚠ Cannot map '{best_strategy}' to file prefix — skipping")
+            return
+
+        best_final = os.path.join(saved_cp_dir, 'best_f1_checkpoint.pth')
+        renamed = False
+        for fname in pth_files:
+            fpath = os.path.join(saved_cp_dir, fname)
+            if fname.startswith(best_prefix) and not renamed:
+                os.rename(fpath, best_final)
+                renamed = True
+                print(f"\n🏆 Best F1 strategy: {best_strategy} (F1={best_f1:.2f}%) → best_f1_checkpoint.pth")
+            else:
+                try:
+                    os.remove(fpath)
+                except Exception as e:
+                    print(f"   ⚠ Could not delete {fpath}: {e}")
+
+        if not renamed:
+            print(f"   ⚠ No file with prefix '{best_prefix}' found in saved_checkpoints/")
 
     def get_student_model(self):
         """
@@ -1597,9 +1546,7 @@ if __name__ == "__main__":
         os.makedirs(cv_run_dir, exist_ok=True)
         print(f"📂 CV run #{run_number}, saving to: {cv_run_dir}")
 
-        all_fold_results = {}
-        # Track best strategy per fold: [(fold_idx, best_strategy, best_f1, best_metrics)]
-        best_per_fold = []
+        all_fold_results = {}  # {"Fold 1": {strategy_name: metrics_dict, ...}, ...}
 
         for fold_idx, (train_val_idx, test_idx) in enumerate(skf.split(all_indices, all_targets), 1):
             print(f"\n{'='*70}")
@@ -1637,51 +1584,12 @@ if __name__ == "__main__":
 
                 all_fold_results[f"Fold {fold_idx}"] = fold_results
 
-                # === Tìm strategy có F1 cao nhất trong fold này ===
-                best_strategy_name = None
-                best_f1 = -1.0
+                # In kết quả tất cả strategies của fold này
+                print(f"\n  📊 Fold {fold_idx} - All strategy results:")
+                metric_keys_print = ['Accuracy (%)', 'F1-Score (%)', 'AUC (%)']
                 for strategy_name, metrics in fold_results.items():
-                    f1_val = metrics.get('F1-Score (%)', -1.0)
-                    if f1_val > best_f1:
-                        best_f1 = f1_val
-                        best_strategy_name = strategy_name
-
-                print(f"\n  🏆 Fold {fold_idx}: Best strategy = {best_strategy_name} (F1={best_f1:.2f}%)")
-
-                best_per_fold.append({
-                    'fold': fold_idx,
-                    'best_strategy': best_strategy_name,
-                    'best_f1': best_f1,
-                    'best_metrics': fold_results[best_strategy_name],
-                    'teacher_ckpt': fold_config["teacher_checkpoint"] if use_per_fold_teacher else Config.TEACHER_CHECKPOINT,
-                })
-
-                # === Copy/rename best strategy checkpoint với suffix _FoldN ===
-                saved_ckpt_dir = os.path.join(fold_save_dir, 'saved_checkpoints')
-                if os.path.isdir(saved_ckpt_dir):
-                    import glob as _glob
-                    for ckpt_file in _glob.glob(os.path.join(saved_ckpt_dir, '*.pth')):
-                        ckpt_basename = os.path.basename(ckpt_file)
-                        # Chỉ rename checkpoint tốt nhất
-                        # Map strategy name → file prefix
-                        is_match = False
-                        if 'strategy1' in ckpt_basename and 'Best' in best_strategy_name:
-                            is_match = True
-                        elif 'strategy2' in ckpt_basename and 'Top-' in best_strategy_name:
-                            # Check nếu K value khớp
-                            for k_val in [2, 3, 4, 5]:
-                                if f'top_{k_val}' in ckpt_basename and f'Top-{k_val}' in best_strategy_name:
-                                    is_match = True
-                                    break
-                        elif 'strategy3' in ckpt_basename and 'Last' in best_strategy_name:
-                            is_match = True
-
-                        if is_match:
-                            import shutil as _shutil
-                            new_name = ckpt_basename.replace('.pth', f'_Fold{fold_idx}.pth')
-                            new_path = os.path.join(saved_ckpt_dir, new_name)
-                            _shutil.copy2(ckpt_file, new_path)
-                            print(f"    ✓ Best checkpoint saved as: {new_name}")
+                    vals = " | ".join(f"{k}: {metrics.get(k, 0):.2f}%" for k in metric_keys_print)
+                    print(f"     {strategy_name:<35} {vals}")
 
                 print(f"  ✅ Fold {fold_idx} completed")
 
@@ -1696,18 +1604,19 @@ if __name__ == "__main__":
         print(f" CROSS-VALIDATION SUMMARY ({Config.CV_N_SPLITS}-Fold)")
         print(f"{'='*70}")
 
-        # === Sheet 1: Mean ± Std cho TẤT CẢ strategies ===
-        cv_all_strategies_rows = []
+        metric_keys = ['Test Loss', 'Accuracy (%)', 'Precision (%)', 'Recall (%)', 'F1-Score (%)', 'AUC (%)']
+
+        # Lấy danh sách strategy từ fold đầu tiên có kết quả
         strategy_names = []
-        for fold_name, fold_res in all_fold_results.items():
+        for fold_res in all_fold_results.values():
             strategy_names = list(fold_res.keys())
             break
 
-        metric_keys = ['Test Loss', 'Accuracy (%)', 'Precision (%)', 'Recall (%)', 'F1-Score (%)', 'AUC (%)']
-
+        # === Sheet 1: CV Summary — Mean ± Std per strategy across all folds ===
+        cv_summary_rows = []
         for strategy_name in strategy_names:
             fold_metrics = []
-            for fold_name, fold_res in all_fold_results.items():
+            for fold_res in all_fold_results.values():
                 if strategy_name in fold_res:
                     fold_metrics.append(fold_res[strategy_name])
 
@@ -1716,77 +1625,53 @@ if __name__ == "__main__":
                 for key in metric_keys:
                     values = [m[key] for m in fold_metrics if key in m]
                     if values:
-                        row[f"{key} (mean)"] = round(np.mean(values), 4 if key == 'Test Loss' else 2)
-                        row[f"{key} (std)"] = round(np.std(values), 4 if key == 'Test Loss' else 2)
-                        if key != 'Test Loss':
-                            row[f"{key} (mean ± std)"] = f"{np.mean(values):.2f} ± {np.std(values):.2f}"
-                        else:
-                            row[f"{key} (mean ± std)"] = f"{np.mean(values):.4f} ± {np.std(values):.4f}"
-                cv_all_strategies_rows.append(row)
+                        mean_v = np.mean(values)
+                        std_v  = np.std(values)
+                        fmt = '.4f' if key == 'Test Loss' else '.2f'
+                        row[f"{key} (mean)"] = round(mean_v, 4 if key == 'Test Loss' else 2)
+                        row[f"{key} (std)"]  = round(std_v,  4 if key == 'Test Loss' else 2)
+                        row[f"{key} (mean ± std)"] = f"{mean_v:{fmt}} ± {std_v:{fmt}}"
+                cv_summary_rows.append(row)
 
-        cv_all_df = pd.DataFrame(cv_all_strategies_rows) if cv_all_strategies_rows else pd.DataFrame()
+        cv_summary_df = pd.DataFrame(cv_summary_rows) if cv_summary_rows else pd.DataFrame()
 
-        # === Sheet 2: Mean ± Std dựa trên 5 best checkpoints (1 per fold, F1 cao nhất) ===
-        cv_best_rows = []
-        if best_per_fold:
-            best_fold_metrics_list = [info['best_metrics'] for info in best_per_fold]
-            row = {'Strategy': 'Best per Fold (highest F1)'}
-            for key in metric_keys:
-                values = [m[key] for m in best_fold_metrics_list if key in m]
-                if values:
-                    row[f"{key} (mean)"] = round(np.mean(values), 4 if key == 'Test Loss' else 2)
-                    row[f"{key} (std)"] = round(np.std(values), 4 if key == 'Test Loss' else 2)
-                    if key != 'Test Loss':
-                        row[f"{key} (mean ± std)"] = f"{np.mean(values):.2f} ± {np.std(values):.2f}"
-                    else:
-                        row[f"{key} (mean ± std)"] = f"{np.mean(values):.4f} ± {np.std(values):.4f}"
-            cv_best_rows.append(row)
-
-        cv_best_df = pd.DataFrame(cv_best_rows) if cv_best_rows else pd.DataFrame()
-
-        # === Sheet 3: Chi tiết best strategy cho từng fold ===
+        # === Sheet 2: Fold Details — raw values per fold per strategy ===
         cv_detail_rows = []
-        for info in best_per_fold:
-            detail_row = {
-                'Fold': info['fold'],
-                'Best Strategy': info['best_strategy'],
-                'F1-Score (%)': round(info['best_f1'], 2),
-            }
-            for key in metric_keys:
-                if key != 'F1-Score (%)' and key in info['best_metrics']:
-                    detail_row[key] = round(info['best_metrics'][key], 4 if key == 'Test Loss' else 2)
-            if use_per_fold_teacher:
-                detail_row['Teacher Checkpoint'] = info.get('teacher_ckpt', '')
-            cv_detail_rows.append(detail_row)
+        for fold_name, fold_res in all_fold_results.items():
+            fold_idx_num = int(fold_name.split()[-1])
+            for strategy_name, metrics in fold_res.items():
+                detail_row = {'Fold': fold_idx_num, 'Strategy': strategy_name}
+                for key in metric_keys:
+                    if key in metrics:
+                        detail_row[key] = round(metrics[key], 4 if key == 'Test Loss' else 2)
+                if use_per_fold_teacher:
+                    detail_row['Teacher Checkpoint'] = Config.CV_TEACHER_CHECKPOINTS[fold_idx_num - 1] \
+                        if Config.CV_TEACHER_CHECKPOINTS else Config.TEACHER_CHECKPOINT
+                cv_detail_rows.append(detail_row)
 
         cv_detail_df = pd.DataFrame(cv_detail_rows) if cv_detail_rows else pd.DataFrame()
+        if not cv_detail_df.empty:
+            cv_detail_df = cv_detail_df.sort_values(['Fold', 'Strategy']).reset_index(drop=True)
 
-        # === Xuất Excel với nhiều sheets ===
+        # === Xuất Excel ===
         cv_excel_path = os.path.join(cv_run_dir, 'cv_summary_results.xlsx')
         with pd.ExcelWriter(cv_excel_path, engine='openpyxl') as writer:
-            if not cv_best_df.empty:
-                cv_best_df.to_excel(writer, sheet_name='Best per Fold Summary', index=False)
+            if not cv_summary_df.empty:
+                cv_summary_df.to_excel(writer, sheet_name='CV Summary (Mean ± Std)', index=False)
             if not cv_detail_df.empty:
-                cv_detail_df.to_excel(writer, sheet_name='Fold Details (Best Strategy)', index=False)
-            if not cv_all_df.empty:
-                cv_all_df.to_excel(writer, sheet_name='All Strategies Summary', index=False)
+                cv_detail_df.to_excel(writer, sheet_name='Fold Details', index=False)
 
         print(f"\n✓ CV Summary saved to: {cv_excel_path}")
-        print(f"  - Sheet 'Best per Fold Summary': Mean ± Std từ {Config.CV_N_SPLITS} best checkpoints")
-        print(f"  - Sheet 'Fold Details (Best Strategy)': Strategy nào cao nhất mỗi fold")
-        print(f"  - Sheet 'All Strategies Summary': Mean ± Std cho tất cả strategies")
+        print(f"  - Sheet 'CV Summary (Mean ± Std)': Mean ± Std cho từng strategy qua {Config.CV_N_SPLITS} fold")
+        print(f"  - Sheet 'Fold Details': Kết quả raw của từng strategy trên từng fold")
 
-        if not cv_detail_df.empty:
+        if not cv_summary_df.empty:
             print(f"\n{'='*70}")
-            print(f" BEST STRATEGY PER FOLD:")
+            print(f" CV SUMMARY — MEAN ± STD PER STRATEGY:")
             print(f"{'='*70}")
-            print(cv_detail_df.to_string(index=False))
-
-        if not cv_best_df.empty:
-            print(f"\n{'='*70}")
-            print(f" BEST PER FOLD SUMMARY (Mean ± Std):")
-            print(f"{'='*70}")
-            print(cv_best_df.to_string(index=False))
+            # In các cột mean ± std
+            cols_to_print = ['Strategy'] + [f"{k} (mean ± std)" for k in metric_keys if f"{k} (mean ± std)" in cv_summary_df.columns]
+            print(cv_summary_df[cols_to_print].to_string(index=False))
 
         print(f"\n{'='*70}")
         print(f" CROSS-VALIDATION COMPLETED!")

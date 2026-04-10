@@ -58,13 +58,12 @@ class Config:
     # Early stopping
     PATIENCE = 30
 
-    # ===================== DWA Initial Lambda Values =====================
-    # Initial weights for first 2 epochs before DWA computes dynamic weights
-    DWA_INIT_LAMBDA_CE     = 1.0    # Cross-Entropy loss
-    DWA_INIT_LAMBDA_PROJ1  = 1.0    # L_proj1 (PCA attention loss)
-    DWA_INIT_LAMBDA_PROJ2  = 1.0    # L_proj2 (GW linear loss)
-    DWA_INIT_LAMBDA_LOGITS = 1.0    # L_logits (Hinton KD loss)
-    DWA_INIT_LAMBDA_DIST   = 1.0    # L_dist (DIST loss)
+    # ===================== Fixed Loss Weights =====================
+    LAMBDA_CE     = 1.0   # Weight for Cross-Entropy loss
+    LAMBDA_PROJ1  = 1.0   # Weight for L_proj1 (PCA attention loss)
+    LAMBDA_PROJ2  = 1.0   # Weight for L_proj2 (GW linear loss)
+    LAMBDA_LOGITS = 1.0   # Weight for L_logits (Hinton KD loss)
+    LAMBDA_DIST   = 1.0   # Weight for L_dist (DIST loss)
 
     LABEL_SMOOTHING = 0.1   # CrossEntropyLoss label smoothing
 
@@ -73,18 +72,11 @@ class Config:
 
     # ===================== Ablation: Enable/Disable Individual Losses =====================
     # Set any flag to False to remove that loss from training.
-    # DWA will automatically adjust to the active losses.
     USE_CE     = True   # Cross-Entropy loss (classification, should almost always be True)
     USE_PROJ1  = True   # L_proj1 — PCA Attention projection loss
     USE_PROJ2  = True   # L_proj2 — GWLinear projection loss
     USE_LOGITS = True   # L_logits — Hinton KD logits loss
     USE_DIST   = True   # L_dist  — DIST relational loss
-
-    # ===================== DWA Hyperparameters =====================
-    # Toggle DWA on/off: True = dynamic weights, False = fixed initial lambdas
-    USE_DWA = True
-    # Temperature T for DWA softmax (higher T → more uniform weights)
-    DWA_TEMPERATURE = 2.5
 
     # Hinton KD temperature (for logits distillation)
     TEMPERATURE = 4.0
@@ -126,18 +118,13 @@ class Config:
     # Strategy 2: top-K values to try
     TOP_K_VALUES = [2, 3, 4, 5]
 
+    # After evaluation: keep only the 1 strategy checkpoint with best F1
+    KEEP_BEST_F1_CHECKPOINT_ONLY = True
+
     # ===================== Helper =====================
     @classmethod
     def to_pipeline_dict(cls):
         """Return a dict that can be unpacked into DistillationPipeline(**config)."""
-        # Auto-compute DWA num_tasks from active losses
-        dwa_num_tasks = sum([
-            cls.USE_CE,
-            cls.USE_PROJ1 and cls.USE_PROJECTION,
-            cls.USE_PROJ2 and cls.USE_PROJECTION,
-            cls.USE_LOGITS,
-            cls.USE_DIST,
-        ])
         return {
             "data_dir": cls.DATA_DIR,
             "num_classes": cls.NUM_CLASSES,
@@ -152,12 +139,12 @@ class Config:
             "block_qkv_id": cls.BLOCK_QKV_ID,
             "device": cls.DEVICE,
             "save_dir": cls.SAVE_DIR,
-            "dwa_init_lambdas": [
-                cls.DWA_INIT_LAMBDA_CE,
-                cls.DWA_INIT_LAMBDA_PROJ1,
-                cls.DWA_INIT_LAMBDA_PROJ2,
-                cls.DWA_INIT_LAMBDA_LOGITS,
-                cls.DWA_INIT_LAMBDA_DIST,
+            "loss_lambdas": [
+                cls.LAMBDA_CE,
+                cls.LAMBDA_PROJ1,
+                cls.LAMBDA_PROJ2,
+                cls.LAMBDA_LOGITS,
+                cls.LAMBDA_DIST,
             ],
             "temperature": cls.TEMPERATURE,
             "patience": cls.PATIENCE,
@@ -181,10 +168,6 @@ class Config:
             "use_proj2":  cls.USE_PROJ2,
             "use_logits": cls.USE_LOGITS,
             "use_dist":   cls.USE_DIST,
-            # DWA hyperparams
-            "use_dwa":         cls.USE_DWA,
-            "dwa_temperature": cls.DWA_TEMPERATURE,
-            "dwa_num_tasks":   dwa_num_tasks,
             # Weighted sampler & Focal loss
             "use_weighted_sampler": cls.USE_WEIGHTED_SAMPLER,
             "use_focal_loss": cls.USE_FOCAL_LOSS,
