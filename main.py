@@ -297,9 +297,9 @@ class DistillationPipeline:
         self.save_dir = save_dir
         self.temperature = temperature
         self.patience = patience
-        self.start_factor_student = float(start_factor_student) if not isinstance(start_factor_student, float) else start_factor_student
+        self.start_factor_student = start_factor_student
         # self.start_factor_teacher = start_factor_teacher
-        self.eta_min_student = float(eta_min_student) if not isinstance(eta_min_student, float) else eta_min_student
+        self.eta_min_student = eta_min_student
         self.dist_beta = dist_beta
         self.dist_gamma = dist_gamma
         self.use_projection = use_projection
