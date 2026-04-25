@@ -412,40 +412,30 @@ def main():
 
                     save_model_results(model_name, results, fold_folder)
 
-                    # === Chỉ giữ lại 1 checkpoint có F1 cao nhất trong fold này ===
-                    # Tìm strategy có F1 cao nhất
-                    best_strategy = max(results.keys(), key=lambda s: results[s]['metrics'].get('F1-Score (%)', 0.0))
-                    best_f1 = results[best_strategy]['metrics'].get('F1-Score (%)', 0.0)
-                    print(f"\n  🏆 Fold {fold_idx} - {model_name}: Best = {best_strategy} (F1={best_f1:.2f}%)")
-
-                    # Xóa tất cả strategy checkpoints trừ best, rename thành best_f1_checkpoint.pth
+                    # === Chỉ giữ lại Strategy 1 checkpoint (best val_loss) của fold này ===
                     if os.path.exists(strategy_ckpt_dir):
                         pth_files = [f for f in os.listdir(strategy_ckpt_dir) if f.endswith('.pth')]
-                        # Map strategy name → file prefix
-                        def _strategy_prefix(name):
-                            if name == 'Strategy 1':
-                                return 'Strategy_1'
-                            if name.startswith('Strategy 2'):
-                                k = name.split('K=')[-1].rstrip(')')
-                                return f'Strategy_2_K{k}'
-                            if name == 'Strategy 3':
-                                return f'Strategy_3_last_{Config.LAST_N_EPOCHS}'
-                            return None
+                        strategy1_src = os.path.join(strategy_ckpt_dir, 'Strategy_1_best.pth')
+                        strategy1_dst = os.path.join(strategy_ckpt_dir, f'strategy1_fold{fold_idx}_checkpoint.pth')
 
-                        best_prefix = _strategy_prefix(best_strategy)
-                        best_final_path = os.path.join(strategy_ckpt_dir, 'best_f1_checkpoint.pth')
-                        renamed = False
+                        # Rename Strategy 1 checkpoint to a stable name first (avoid collision)
+                        if os.path.exists(strategy1_src):
+                            os.rename(strategy1_src, strategy1_dst)
+
+                        # Delete all other strategy checkpoints
                         for fname in pth_files:
+                            if fname == 'Strategy_1_best.pth':
+                                continue  # already renamed above
                             fpath = os.path.join(strategy_ckpt_dir, fname)
-                            if best_prefix and fname.startswith(best_prefix) and not renamed:
-                                os.rename(fpath, best_final_path)
-                                renamed = True
-                                print(f"    ✓ Kept: {best_strategy} → best_f1_checkpoint.pth")
-                            else:
-                                try:
-                                    os.remove(fpath)
-                                except Exception as e:
-                                    print(f"    ⚠ Could not delete {fname}: {e}")
+                            try:
+                                os.remove(fpath)
+                            except Exception as e:
+                                print(f"    ⚠ Could not delete {fname}: {e}")
+
+                        if os.path.exists(strategy1_dst):
+                            print(f"    ✓ Kept: Strategy 1 (best val_loss) → strategy1_fold{fold_idx}_checkpoint.pth")
+                        else:
+                            print(f"    ⚠ Strategy 1 checkpoint not found in {strategy_ckpt_dir}")
 
                     # Xóa training checkpoints (epoch_*.pth, best_checkpoint.pth, etc.)
                     if os.path.exists(fold_ckpt_dir):
