@@ -26,7 +26,7 @@ The student retains only Bottleneck stages 1–5 (output: 14 × 14 × 96), makin
 
 ![AgriKD Pipeline](assets/pipeline.png)
 
-> Place `pipeline.png` inside an `assets/` folder at the repo root.
+
 
 The distillation framework comprises:
 
