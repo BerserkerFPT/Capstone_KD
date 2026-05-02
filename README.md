@@ -8,7 +8,7 @@
 
 Before distillation, candidate teacher and student architectures were benchmarked on each dataset. That pipeline is available on a dedicated branch of this repository:
 
-**[`baseline/teacher-student-selection`](../../tree/baseline/teacher-student-selection)** — benchmarks pretrained models (ViT, ResNet, MobileNet, EfficientNet, …), evaluates with three checkpoint strategies, and exports F1/accuracy/AUC results to Excel.
+**[`baseline/teacher-student-selection`](../../tree/baseline/teacher-student-selection)** — benchmarks pretrained models (ViT, ResNet, MobileNet, EfficientNet, …) and exports F1/accuracy/AUC results to Excel.
 
 The experiments there led to selecting **ViT-B/16 as the teacher** and **truncated MobileNetV2 (Bottleneck 1–5) as the student** for AgriKD.
 
@@ -155,14 +155,6 @@ CV_N_SPLITS          = 5
 python main.py
 # Outputs: checkpoints/run_N/cv_summary_results.xlsx
 ```
-
-Checkpoint strategies evaluated after training:
-
-| Strategy | Description |
-|---|---|
-| **Strategy 1** | Best validation checkpoint |
-| **Strategy 2** | Top-K ensemble (K ∈ {2, 3, 4, 5}) |
-| **Strategy 3** | Average of last N epochs |
 
 ---
 
