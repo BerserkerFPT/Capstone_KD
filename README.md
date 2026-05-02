@@ -45,7 +45,7 @@ Optionally, **Stratified K-Fold Cross-Validation** can be enabled for more robus
 ├── config.py          # All hyperparameters — edit here
 ├── main.py            # Entry point — runs the full pipeline
 ├── train.py           # Training loop, early stopping, checkpoint management
-├── evaluate.py        # Three evaluation strategies + Excel export
+├── evaluate.py        # Best-checkpoint evaluation + Excel export
 ├── models.py          # Pretrained backbones with custom classifier head
 ├── dataset.py         # Data loading, augmentation, WeightedRandomSampler
 ├── losses.py          # PolyFocalLoss + class weight utilities
@@ -151,23 +151,31 @@ Once teacher and student candidates are selected from this benchmark, the AgriKD
 
 → **See `main` branch for the full AgriKD implementation.**
 
----
+## Cross-Validation
 
-## Citation
+When `USE_CROSS_VALIDATION = True`:
+- The `train + val` splits are merged into a CV pool
+- The `test` split is kept as a global hold-out
+- `StratifiedKFold` (scikit-learn) divides the pool into K folds, preserving class ratios
+- Final results: **mean ± std** across K folds, saved to `cv_summary_results.xlsx`
 
-```bibtex
-@article{agrikd2026,
-  title   = {AgriKD: Cross-Architecture Knowledge Distillation for Efficient Leaf Disease Classification},
-  author  = {Your Name et al.},
-  journal = {Your Journal/Conference},
-  year    = {2026}
-}
-```
+## Metrics
 
+All metrics use **macro averaging** (unweighted mean across classes):
 
-## Models hỗ trợ
+| Metric | Description |
+|--------|-------------|
+| Accuracy | Overall correct / total samples |
+| Precision | Macro average |
+| Recall | Macro average |
+| F1-Score | Macro average |
+| AUC | Macro average, one-vs-rest |
 
-Uncomment trong `Config.MODELS`:
+Results include a **per-class breakdown** (Precision, Recall, F1, Specificity, AUC, Support).
+
+## Supported Models
+
+Uncomment entries in `Config.MODELS` to benchmark additional architectures:
 
 ```python
 MODELS = [
@@ -181,54 +189,9 @@ MODELS = [
 ]
 ```
 
-## 3 Chiến thuật Đánh giá
+## Checkpoints
 
-| Strategy | Mô tả |
-|----------|-------|
-| **Best Checkpoint** | Checkpoint có val_loss thấp nhất |
-| **Top-K Average** | Trung bình weights của K checkpoint tốt nhất (K = 2,3,4,5) |
-| **Last-N Average** | Trung bình weights của N epoch cuối cùng |
-
-## Cross-Validation
-
-Khi `USE_CROSS_VALIDATION = True`:
-- Data `train + val` gộp thành CV pool
-- `test` giữ nguyên làm hold-out
-- Dùng `StratifiedKFold` (sklearn) chia K fold, giữ tỉ lệ class
-- Kết quả cuối: **mean ± std** qua K fold → lưu vào `cv_summary_results.xlsx`
-
-## Metrics
-
-Tất cả metrics dùng **Macro averaging** (trung bình đều giữa các class):
-
-| Metric | Cách tính |
-|--------|-----------|
-| Accuracy | Overall correct / total |
-| Precision | Macro average |
-| Recall | Macro average |
-| F1-Score | Macro average |
-| AUC | Macro average, one-vs-rest |
-
-Kết quả bao gồm cả **per-class breakdown** (Precision, Recall, F1, Specificity, AUC, Support).
-
-## Reproduce kết quả
-
-1. Set `RANDOM_SEED = 42` (mặc định) — đảm bảo cùng data split, cùng weight init
-2. Đặt đúng `DATASET_PATH`
-3. Chọn model trong `MODELS`
-4. Chạy `python main.py`
-
-Seed cố định cho: `random`, `numpy`, `torch`, `CUDA`, `cudnn.deterministic`.
-
-## Ghi chú
-
-- **WRS + Focal Loss đồng thời**: Không lỗi code, nhưng có thể double-correct class imbalance. Cân nhắc chỉ bật 1 trong 2.
-- **LR Scheduler**: Linear Warmup → Cosine Annealing
-- **Data Augmentation** (chỉ train): RandomFlip, RandomRotation(90°), ColorJitter
-
-## 💾 Checkpoints
-
-Checkpoints được lưu trong `checkpoints/`:
+Checkpoints are saved under `checkpoints/`:
 
 ```
 checkpoints/
@@ -242,86 +205,70 @@ checkpoints/
 └── ...
 ```
 
-## 🔧 Tùy chỉnh
+## Customisation
 
-### Thay đổi learning rate decay:
+### Learning rate decay
 
-Trong `config.py`:
+In `config.py`:
 
 ```python
-LR_DECAY_PATIENCE = 5  # Giảm LR sau 5 epochs val_loss không cải thiện
-LR_DECAY_FACTOR = 0.5  # Nhân LR với 0.5
+LR_DECAY_PATIENCE = 5   # Reduce LR after 5 epochs without val_loss improvement
+LR_DECAY_FACTOR = 0.5   # Multiply LR by 0.5
 ```
 
-### Thay đổi custom classifier:
+### Custom classifier head
 
-Trong `config.py`:
+In `config.py`:
 
 ```python
-CLASSIFIER_CONFIG = [256, 128, 64]  # 3 hidden layers
+CLASSIFIER_CONFIG = [256, 128, 64]   # 3 hidden layers
 DROPOUT_RATE = 0.5
 ```
 
-### Thay đổi data augmentation:
+### Data augmentation
 
-Trong `dataset.py`, function `get_transforms()`:
+In `dataset.py`, `get_transforms()`:
 
 ```python
 transform = transforms.Compose([
     transforms.Resize((Config.IMAGE_SIZE, Config.IMAGE_SIZE)),
     transforms.RandomHorizontalFlip(p=0.5),
-    # Thêm augmentation khác...
+    # Add further augmentations here...
 ])
 ```
 
-### Thêm/bớt models:
+### Adding or removing models
 
-Trong `config.py`:
+In `config.py`:
 
 ```python
 MODELS = [
     'vgg16',
     'resnet101',
-    # Thêm/bớt models ở đây
+    # Add or remove models here
 ]
 ```
 
-## 📋 Requirements
+## Notes
 
-- Python >= 3.8
-- PyTorch >= 2.0.0
-- CUDA (recommended) hoặc CPU
-- RAM: >= 8GB
-- GPU: >= 6GB VRAM (recommended)
+- **WeightedRandomSampler + Focal Loss simultaneously**: No code error, but may over-correct for class imbalance — consider enabling only one.
+- **LR Scheduler**: Linear Warmup → Cosine Annealing
+- **Data Augmentation** (train only): RandomHorizontalFlip, RandomRotation(90°), ColorJitter
 
-## 🎓 Sử dụng cho Research
+## Troubleshooting
 
-Code này được thiết kế để:
-- Dễ dàng thay đổi dataset
-- Tự động hóa toàn bộ pipeline
-- Export kết quả professional
-- Tái sử dụng cho nhiều experiments
+**Out of memory:**
+- Reduce `BATCH_SIZE` in `config.py`
+- Reduce `NUM_WORKERS`
 
-Chỉ cần thay đổi `DATASET_PATH` trong `config.py` và chạy `python main.py`!
+**Dataset not found:**
+- Check `DATASET_PATH` in `config.py`
+- Ensure the folder structure follows `ImageFolder` format (one subfolder per class)
 
-## 📝 Citation
+**Model not training:**
+- Verify GPU/CUDA availability
+- Verify all dependencies are installed
 
-Nếu sử dụng code này cho research, vui lòng ghi nguồn phù hợp.
+## Support
 
-## 🐛 Troubleshooting
-
-### Lỗi out of memory:
-- Giảm `BATCH_SIZE` trong `config.py`
-- Giảm `NUM_WORKERS`
-
-### Lỗi không tìm thấy dataset:
-- Kiểm tra đường dẫn `DATASET_PATH` trong `config.py`
-- Đảm bảo folder structure đúng format (classes trong subfolder)
-
-### Model không train:
-- Kiểm tra GPU/CUDA availability
-- Kiểm tra dependencies đã cài đủ chưa
-
-## 📧 Support
-
-Nếu có vấn đề, vui lòng mở issue hoặc liên hệ.
+If you encounter any issues, please open a GitHub issue.
