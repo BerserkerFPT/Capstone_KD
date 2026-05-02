@@ -185,14 +185,5 @@ Key findings:
 | `HEURISTIC_WEIGHT_INIT_MODE` | False | Run λ heuristic initialisation experiments |
 
 
-This work builds on the cross-architecture KD framework by:
 
-```bibtex
-@inproceedings{liu2022cross,
-  title     = {Cross-Architecture Knowledge Distillation},
-  author    = {Liu, Yufan and Cao, Jiajiong and Li, Bing and Hu, Weiming and Ding, Jingting and Li, Liang},
-  booktitle = {Proceedings of the Asian Conference on Computer Vision (ACCV)},
-  year      = {2022}
-}
-```
 
