@@ -4,6 +4,16 @@
 
 ---
 
+## Baseline Model Selection
+
+Before distillation, candidate teacher and student architectures were benchmarked on each dataset. That pipeline is available on a dedicated branch of this repository:
+
+**[`baseline/teacher-student-selection`](../../tree/baseline/teacher-student-selection)** — benchmarks pretrained models (ViT, ResNet, MobileNet, EfficientNet, …), evaluates with three checkpoint strategies, and exports F1/accuracy/AUC results to Excel.
+
+The experiments there led to selecting **ViT-B/16 as the teacher** and **truncated MobileNetV2 (Bottleneck 1–5) as the student** for AgriKD.
+
+---
+
 ## Overview
 
 AgriKD adapts cross-architecture knowledge distillation (Liu et al., 2022) for agricultural leaf disease diagnosis. A large **ViT-B/16 teacher** transfers rich global attention knowledge to a lightweight **truncated MobileNetV2 student** via two trainable projectors, enabling high-accuracy inference at a fraction of the teacher's computational cost.
