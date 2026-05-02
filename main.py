@@ -284,6 +284,7 @@ class DistillationPipeline:
         # --- Unused CV params (kept for unpacking compatibility) ---
         use_cross_validation=False,
         cv_n_splits=5,
+        heuristic_weight_init_mode=False,
     ):
         # ===== SET GLOBAL SEED FIRST (before any model/data init) =====
         self.random_seed = random_seed
@@ -322,6 +323,7 @@ class DistillationPipeline:
         self.focal_gamma = focal_gamma
         self.poly_epsilon = poly_epsilon
         self.class_weight_method = class_weight_method
+        self.heuristic_weight_init_mode = heuristic_weight_init_mode
         if not self.use_ce:
             print("\u26a0\ufe0f  WARNING: USE_CE=False. CE loss is disabled — classification may fail!")
         # self.eta_min_teacher = eta_min_teacher,
@@ -348,7 +350,8 @@ class DistillationPipeline:
             num_workers=num_workers,
             use_weighted_sampler=use_weighted_sampler,
             random_seed=self.random_seed,
-            fold_indices=fold_indices
+            fold_indices=fold_indices,
+            heuristic_weight_init_mode=self.heuristic_weight_init_mode
         )
         self.train_loader, self.val_loader, self.test_loader = self.data_handler.get_dataloaders()
         
@@ -1487,6 +1490,131 @@ class DistillationPipeline:
         return self.student
 
 
+# =============================================================================
+# Heuristic Loss Weight Initialisation (§ Loss Weight Initialisation)
+# =============================================================================
+def run_heuristic_weight_init(base_config):
+    """
+    Run 5 single-loss experiments (CE, Proj1, Proj2, Logits, DIST),
+    each with λ=1.0 in isolation.
+
+    Dataset split:
+      - Train: original 70%
+      - Eval : original 15% val (fixed, same indices across all 5 runs)
+      - Test : original 15% test → HELD OUT, never touched.
+
+    After all 5 runs, normalise contribution F1-scores to produce
+    dataset-specific λ values and export summary to Excel.
+    """
+    loss_configs = {
+        "ce":     {"use_ce": True,  "use_proj1": False, "use_proj2": False, "use_logits": False, "use_dist": False, "use_projection": False},
+        "proj1":  {"use_ce": False, "use_proj1": True,  "use_proj2": False, "use_logits": False, "use_dist": False, "use_projection": True},
+        "proj2":  {"use_ce": False, "use_proj1": False, "use_proj2": True,  "use_logits": False, "use_dist": False, "use_projection": True},
+        "logits": {"use_ce": False, "use_proj1": False, "use_proj2": False, "use_logits": True,  "use_dist": False, "use_projection": False},
+        "dist":   {"use_ce": False, "use_proj1": False, "use_proj2": False, "use_logits": False, "use_dist": True,  "use_projection": False},
+    }
+
+    all_metrics = {}  # {loss_name: {strategy_name: metrics_dict}}
+    ablation_save_dir = base_config["save_dir"]
+    os.makedirs(ablation_save_dir, exist_ok=True)
+
+    for loss_name, flags in loss_configs.items():
+        print("\n" + "=" * 70)
+        print(f"� WEIGHT INIT RUN: {loss_name.upper()} (λ=1.0)")
+        print("=" * 70)
+
+        # Build config for this run
+        run_config = dict(base_config)
+        run_config.update(flags)
+        run_config["heuristic_weight_init_mode"] = True
+        run_config["loss_lambdas"] = [1.0, 1.0, 1.0, 1.0, 1.0]
+        run_config["save_dir"] = os.path.join(ablation_save_dir, f"ablation_{loss_name}")
+
+        # Reset seed for each run to ensure identical data splits
+        set_seed(run_config.get("random_seed", 42))
+
+        pipeline = DistillationPipeline(**run_config)
+        results = pipeline.train()
+        all_metrics[loss_name] = results
+
+        # ── Explicit cleanup: shutdown DataLoader workers & free VRAM ──
+        try:
+            pipeline.train_loader._iterator._shutdown_workers()
+        except Exception:
+            pass
+        try:
+            pipeline.val_loader._iterator._shutdown_workers()
+        except Exception:
+            pass
+        try:
+            pipeline.test_loader._iterator._shutdown_workers()
+        except Exception:
+            pass
+        del pipeline
+        import gc
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+
+        print(f"\n✅ Weight init run '{loss_name}' completed. VRAM & workers released.\n")
+
+    # ===== Compute relative weights from Strategy 1 (Best Checkpoint) =====
+    _export_weight_init_summary(all_metrics, ablation_save_dir)
+
+
+def _export_weight_init_summary(all_metrics, save_dir):
+    """
+    Normalise per-loss contribution F1-scores to λ values and export to Excel.
+    Uses Strategy 1 (Best Checkpoint) accuracy & F1 for weight calculation.
+    """
+    loss_names = ["ce", "proj1", "proj2", "logits", "dist"]
+    strategy_key = "Strategy 1 (Best)"
+
+    rows = []
+    for loss_name in loss_names:
+        strats = all_metrics.get(loss_name, {})
+        m = strats.get(strategy_key, None)
+        if m is None:
+            # Fallback: try any available strategy
+            if strats:
+                m = next(iter(strats.values()))
+            else:
+                rows.append({"Loss": loss_name, "Accuracy (%)": 0.0, "F1-Score (%)": 0.0})
+                continue
+        rows.append({
+            "Loss": loss_name,
+            "Accuracy (%)": round(m.get("Accuracy (%)", 0.0), 4),
+            "F1-Score (%)": round(m.get("F1-Score (%)", 0.0), 4),
+            "Precision (%)": round(m.get("Precision (%)", 0.0), 4),
+            "Recall (%)": round(m.get("Recall (%)", 0.0), 4),
+            "AUC (%)": round(m.get("AUC (%)", 0.0), 4),
+            "Test Loss": round(m.get("Test Loss", 0.0), 4),
+        })
+
+    # Compute relative weights
+    total_acc = sum(r["Accuracy (%)"] for r in rows)
+    total_f1  = sum(r["F1-Score (%)"] for r in rows)
+    for r in rows:
+        r["Weight (by Accuracy)"] = round(r["Accuracy (%)"] / total_acc, 6) if total_acc > 0 else 0.0
+        r["Weight (by F1)"]       = round(r["F1-Score (%)"] / total_f1, 6)  if total_f1  > 0 else 0.0
+
+    df = pd.DataFrame(rows)
+
+    excel_path = os.path.join(save_dir, "ablation_weight_summary.xlsx")
+    with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
+        df.to_excel(writer, sheet_name="Ablation Weights", index=False)
+
+    print("\n" + "=" * 70)
+    print("📈 ABLATION WEIGHT SUMMARY")
+    print("=" * 70)
+    print(df.to_string(index=False))
+    print(f"\n📁 Saved to: {excel_path}")
+    print("=" * 70)
+
+    return df
+
+
 # ===== Main =====
 if __name__ == "__main__":
     from config import Config
@@ -1495,6 +1623,18 @@ if __name__ == "__main__":
 
     os.environ["CUDA_VISIBLE_DEVICES"] = Config.CUDA_VISIBLE_DEVICES
 
+    if Config.HEURISTIC_WEIGHT_INIT_MODE:
+        # ── Heuristic Loss Weight Initialisation ──
+        print("=" * 60)
+        print("🔬 HEURISTIC WEIGHT INIT MODE ENABLED")
+        print("   Running 5 single-loss experiments to compute λ values.")
+        print("=" * 60)
+        Config.print_config()
+        config = Config.to_pipeline_dict()
+        run_heuristic_weight_init(config)
+        import sys; sys.exit(0)
+
+    # ── Normal Training ──
     Config.print_config()
     config = Config.to_pipeline_dict()
     print(f"[KD] block_ids = {config['block_ids']}")

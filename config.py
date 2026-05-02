@@ -1,6 +1,6 @@
 """
-Centralized configuration for Knowledge Distillation pipeline.
-Modify all hyperparameters here instead of editing main.py directly.
+Centralized configuration for AgriKD pipeline.
+Edit hyperparameters here; do not modify main.py directly.
 """
 
 
@@ -15,110 +15,101 @@ class Config:
 
     # Train / Val / Test split
     TRAIN_RATIO = 0.70
-    VAL_RATIO = 0.15
-    TEST_RATIO = 0.15
+    VAL_RATIO   = 0.15
+    TEST_RATIO  = 0.15
 
     # ===================== Device =====================
     DEVICE = "cuda"
     CUDA_VISIBLE_DEVICES = "0"
 
-    # ===================== Teacher =====================
+    # ===================== Teacher (ViT-B/16) =====================
     TEACHER_CHECKPOINT = (
         r"/Strategy_2_K2.pth"
     )
-    # Transformer block indices for extracting features / QKV
-    BLOCK_IDS = [0]
-    BLOCK_QKV_ID = [11]
+    BLOCK_IDS    = [0]   # feature extraction block indices
+    BLOCK_QKV_ID = [11]  # QKV extraction block index
 
-    # ===================== Student (MobileNetV2) =====================
-    STUDENT_PRETRAINED = True
-    STUDENT_FEATURE_DIM = 96          # output channels of MobileNetV2 features.11
-    STUDENT_FC_DROPOUT = 0.3          # dropout in StudentWithHead classifier
-    STUDENT_FC_HIDDEN = [512, 256]    # hidden dims of classifier MLP
+    # ===================== Student (Truncated MobileNetV2) =====================
+    STUDENT_PRETRAINED  = True
+    STUDENT_FEATURE_DIM = 96           # output channels of Bottleneck 5 (14×14×96)
+    STUDENT_FC_DROPOUT  = 0.3
+    STUDENT_FC_HIDDEN   = [512, 256]   # MLP classifier hidden dims
 
     # ===================== Projectors =====================
-    EMBED_DIM = 768                   # teacher ViT embed dim (also projector output dim)
+    EMBED_DIM = 768          # ViT embed dim; also projector output dim
 
-    # -- PCAttentionProjector --
-    PCA_DROPOUT = 0.2             # dropout for Conv2d layers in PCA projector
-    PCA_PARTIAL_P = 0.5              # probability of replacing student Q/K/V with teacher's
+    PCA_DROPOUT   = 0.2      # PCAttentionProjector Conv2d dropout
+    PCA_PARTIAL_P = 0.5      # probability of replacing student Q/K/V with teacher's
 
-    # -- GWLinearProjector --
-    GW_DROP_P = 0.4                   # dropout in group-wise linear projector
+    GW_DROP_P = 0.4          # GWLinearProjector dropout
 
     # ===================== Training =====================
-    EPOCHS = 150
+    EPOCHS     = 150
     LR_STUDENT = 5e-3
 
-    # Warmup + Cosine Annealing scheduler
-    WARMUP_EPOCHS_STUDENT = int(0.1 * EPOCHS)   # 15% of total epochs
-    START_FACTOR_STUDENT = 0.1
-    ETA_MIN_STUDENT = 1e-8
+    WARMUP_EPOCHS_STUDENT = int(0.1 * EPOCHS)
+    START_FACTOR_STUDENT  = 0.1
+    ETA_MIN_STUDENT       = 1e-8
 
-    # Early stopping
     PATIENCE = 30
 
-    # ===================== Fixed Loss Weights =====================
-    LAMBDA_CE     = 1.0   # Weight for Cross-Entropy loss
-    LAMBDA_PROJ1  = 1.0   # Weight for L_proj1 (PCA attention loss)
-    LAMBDA_PROJ2  = 1.0   # Weight for L_proj2 (GW linear loss)
-    LAMBDA_LOGITS = 1.0   # Weight for L_logits (Hinton KD loss)
-    LAMBDA_DIST   = 1.0   # Weight for L_dist (DIST loss)
+    # ===================== Loss Weights (λ₁ … λ₅) =====================
+    # Dataset-specific values; use HEURISTIC_WEIGHT_INIT_MODE to auto-compute.
+    LAMBDA_CE     = 1.0   # λ_CE
+    LAMBDA_PROJ1  = 1.0   # λ_proj1  (L_proj1 — PCA attention)
+    LAMBDA_PROJ2  = 1.0   # λ_proj2  (L_proj2 — GW linear)
+    LAMBDA_LOGITS = 1.0   # λ_logits (L_KL   — Hinton KD)
+    LAMBDA_DIST   = 1.0   # λ_dist   (L_Rel  — DIST relational)
 
-    LABEL_SMOOTHING = 0.1   # CrossEntropyLoss label smoothing
+    LABEL_SMOOTHING = 0.1
 
-    # Ablation study: set False to disable PCA/GL projectors (CE + Logits / CE + Logits + Relation)
-    USE_PROJECTION = True
+    # ===================== Loss Ablation Flags =====================
+    USE_PROJECTION = True    # False → disable both projectors (CE + KL only)
 
-    # ===================== Ablation: Enable/Disable Individual Losses =====================
-    # Set any flag to False to remove that loss from training.
-    USE_CE     = True   # Cross-Entropy loss (classification, should almost always be True)
-    USE_PROJ1  = True   # L_proj1 — PCA Attention projection loss
-    USE_PROJ2  = True   # L_proj2 — GWLinear projection loss
-    USE_LOGITS = True   # L_logits — Hinton KD logits loss
-    USE_DIST   = True   # L_dist  — DIST relational loss
+    USE_CE     = True   # cross-entropy
+    USE_PROJ1  = True   # L_proj1
+    USE_PROJ2  = True   # L_proj2
+    USE_LOGITS = True   # L_KL (Hinton)
+    USE_DIST   = True   # L_Rel (DIST)
 
-    # Hinton KD temperature (for logits distillation)
-    TEMPERATURE = 4.0
+    TEMPERATURE = 4.0   # Hinton KD temperature
 
     # ===================== Cross-Validation =====================
-    USE_CROSS_VALIDATION = False   # Bật/tắt Pure K-Fold Cross-Validation (sklearn StratifiedKFold)
-    CV_N_SPLITS = 5                # Số fold cho Cross-Validation
+    USE_CROSS_VALIDATION = False   # StratifiedKFold CV
+    CV_N_SPLITS          = 5
 
-    # Per-fold teacher checkpoints for Potato dataset (imbalanced 1:10)
-    # Khi chạy CV cho Potato: mỗi fold dùng 1 teacher checkpoint tương ứng
-    # Teacher fold i test trên cùng fold test với student fold i
-    # Set None nếu dùng 1 teacher checkpoint chung (TEACHER_CHECKPOINT) cho tất cả fold
-    # Example: ["/path/to/fold1_best.pth", "/path/to/fold2_best.pth", ..., "/path/to/fold5_best.pth"]
-    CV_TEACHER_CHECKPOINTS = None  # List[str] | None — 1 checkpoint per fold, theo thứ tự fold
+    # Per-fold teacher checkpoints (for imbalanced datasets, e.g. Potato 1:10).
+    # Set None to use a single TEACHER_CHECKPOINT for all folds.
+    CV_TEACHER_CHECKPOINTS = None  # List[str] | None
 
-    # ===================== Weighted Random Sampler =====================
-    USE_WEIGHTED_SAMPLER = False   # Use inverse-frequency weighted sampling for imbalanced data
+    # ===================== Imbalanced Data Handling =====================
+    USE_WEIGHTED_SAMPLER = False
+    USE_FOCAL_LOSS       = False
+    FOCAL_GAMMA          = 2.0
+    POLY_EPSILON         = 1.0
+    CLASS_WEIGHT_METHOD  = 'inverse_freq'   # 'inverse_freq' | 'effective_num'
 
-    # ===================== Focal Loss =====================
-    USE_FOCAL_LOSS = False         # Use PolyFocalLoss instead of CrossEntropyLoss
-    FOCAL_GAMMA = 2.0              # Focusing parameter: higher = more focus on hard examples
-    POLY_EPSILON = 1.0             # Poly coefficient: boosts gradient for ambiguous samples
-    CLASS_WEIGHT_METHOD = 'inverse_freq'  # 'inverse_freq' or 'effective_num'
-
-    # DIST loss hyper-params
-    DIST_BETA = 1.0
+    # ===================== DIST Loss =====================
+    DIST_BETA  = 1.0
     DIST_GAMMA = 1.0
+
+    # ===================== Heuristic Loss Weight Initialisation =====================
+    # (§ Loss Weight Initialisation in the paper)
+    # Runs 5 single-loss experiments in isolation on 70% train / 15% val.
+    # Test set (15%) is held out and never touched.
+    # Contribution F1-scores are normalised to produce dataset-specific λ values.
+    # Results exported to ablation_weight_summary.xlsx.
+    HEURISTIC_WEIGHT_INIT_MODE = False
 
     # ===================== Checkpoints & Evaluation =====================
     SAVE_DIR = "checkpoints"
 
-    # Checkpoint manager: keep last N + top K best during training
     KEEP_LAST_N = 10
-    KEEP_TOP_K = 5
+    KEEP_TOP_K  = 5
 
-    # Strategy 3: average last N epochs
     LAST_N_EPOCHS = 10
+    TOP_K_VALUES  = [2, 3, 4, 5]
 
-    # Strategy 2: top-K values to try
-    TOP_K_VALUES = [2, 3, 4, 5]
-
-    # After evaluation: keep only the 1 strategy checkpoint with best F1
     KEEP_BEST_F1_CHECKPOINT_ONLY = True
 
     # ===================== Helper =====================
@@ -178,6 +169,7 @@ class Config:
             # Cross-Validation
             "use_cross_validation": cls.USE_CROSS_VALIDATION,
             "cv_n_splits": cls.CV_N_SPLITS,
+            "heuristic_weight_init_mode": cls.HEURISTIC_WEIGHT_INIT_MODE,
         }
 
     @classmethod

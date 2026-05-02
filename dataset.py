@@ -51,7 +51,8 @@ class DatasetHandler:
         test_ratio=0.15,
         random_seed=42,
         use_weighted_sampler=False,
-        fold_indices=None
+        fold_indices=None,
+        heuristic_weight_init_mode=False
     ):
         self.root_dir = root_dir
         self.image_size = image_size
@@ -63,6 +64,7 @@ class DatasetHandler:
         self.random_seed = random_seed
         self.use_weighted_sampler = use_weighted_sampler
         self.fold_indices = fold_indices  # (train_idx, val_idx, test_idx) for CV
+        self.heuristic_weight_init_mode = heuristic_weight_init_mode
         
         # ===== SET GLOBAL SEED =====
         set_seed(self.random_seed)
@@ -178,9 +180,26 @@ class DatasetHandler:
     
     def get_dataloaders(self):
         """
-        Returns train, val, test dataloaders
+        Returns train, val, test dataloaders.
+
+        In heuristic_weight_init_mode (§ Loss Weight Initialisation):
+          - train_loader = original 70% train indices
+          - val_loader   = original 15% val indices (fixed eval set)
+          - test_loader  = original 15% val indices (same as val_loader)
+          The original 15% test is NEVER touched → no data leakage.
+
+        In normal mode:
+          - train_loader = 70% train
+          - val_loader   = 15% val
+          - test_loader  = 15% test
         """
         train_subset, val_subset, test_subset = self.get_datasets()
+
+        if self.heuristic_weight_init_mode:
+            eval_subset = val_subset
+            print(f"\U0001f52c HEURISTIC WEIGHT INIT: train={len(train_subset)}, "
+                  f"eval={len(eval_subset)} (original val set)")
+            print(f"   \u26a0\ufe0f  Original test set ({len(test_subset)} samples) is HELD OUT.")
         
         # Generator cho reproducibility
         g = torch.Generator()
@@ -217,7 +236,7 @@ class DatasetHandler:
         )
         
         val_loader = DataLoader(
-            val_subset,
+            eval_subset if self.heuristic_weight_init_mode else val_subset,
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
@@ -228,7 +247,7 @@ class DatasetHandler:
         )
         
         test_loader = DataLoader(
-            test_subset,
+            eval_subset if self.heuristic_weight_init_mode else test_subset,
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
