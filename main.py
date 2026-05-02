@@ -1,5 +1,9 @@
 """
-Main script to run complete baseline research pipeline
+AgriKD — Baseline Model Selection Pipeline
+
+Benchmarks candidate teacher and student architectures on a given dataset.
+Run this file to train all models listed in Config.MODELS, evaluate them
+with three checkpoint strategies, and export results to Excel.
 """
 import os
 import shutil
@@ -22,36 +26,17 @@ from visualization import print_dataset_statistics
 
 
 def get_next_run_folder(base_results_dir):
-    """
-    Tạo folder mới cho mỗi lần chạy
-    Tự động tăng số thứ tự: results/1/, results/2/, results/3/, ...
-    
-    Args:
-        base_results_dir: Thư mục results gốc
-    
-    Returns:
-        run_folder: Đường dẫn đến folder cho lần chạy này
-        run_number: Số thứ tự lần chạy
-    """
+    """Return a new numbered subfolder under base_results_dir (1, 2, 3, …)."""
     os.makedirs(base_results_dir, exist_ok=True)
-    
-    # Tìm tất cả các folder có dạng số
-    existing_runs = []
-    for item in os.listdir(base_results_dir):
-        item_path = os.path.join(base_results_dir, item)
-        if os.path.isdir(item_path) and item.isdigit():
-            existing_runs.append(int(item))
-    
-    # Tìm số tiếp theo
-    if existing_runs:
-        next_run = max(existing_runs) + 1
-    else:
-        next_run = 1
-    
-    # Tạo folder mới
+
+    existing_runs = [
+        int(item)
+        for item in os.listdir(base_results_dir)
+        if os.path.isdir(os.path.join(base_results_dir, item)) and item.isdigit()
+    ]
+    next_run = max(existing_runs) + 1 if existing_runs else 1
     run_folder = os.path.join(base_results_dir, str(next_run))
     os.makedirs(run_folder, exist_ok=True)
-    
     return run_folder, next_run
 
 
@@ -133,18 +118,7 @@ def delete_model_checkpoints(model_name, checkpoints_dir):
 
 def export_run_config(run_folder, num_classes=None, class_names=None, 
                       train_count=0, val_count=0, test_count=0):
-    """
-    Xuất toàn bộ config của lần chạy ra file Excel (run_config.xlsx).
-    Mỗi nhóm config = 1 sheet riêng, dễ đọc và so sánh giữa các lần chạy.
-    Nếu tắt focal loss → các param focal tự set 0/None.
-    Nếu tắt WRS → ghi rõ DISABLED.
-    
-    Args:
-        run_folder: Folder lưu kết quả của lần chạy
-        num_classes: Số lượng class
-        class_names: Danh sách tên class
-        train_count, val_count, test_count: Số lượng ảnh mỗi split
-    """
+    """Export full run configuration to run_config.xlsx (one sheet per group)."""
     is_focal = Config.LOSS_FUNCTION == 'poly_focal'
     
     # Sheet 1: Dataset & Splitting
@@ -240,20 +214,14 @@ def export_run_config(run_folder, num_classes=None, class_names=None,
 
 def main():
     """
-    Main pipeline (Process each model sequentially to save disk space):
-    1. Validate configuration
-    2. Load and split dataset
-    3. FOR EACH MODEL:
-       - Train model
-       - Evaluate with 3 strategies
-       - Save individual results
-       - Delete checkpoints
-    4. Combine all results to Excel
-    5. Generate combined performance charts
+    Full pipeline:
+      1. Validate config
+      2. Load and split dataset
+      3. Train each model, evaluate with 3 strategies, save results
+      4. Combine all results to Excel + performance charts
     """
-    
     print("\n" + "="*70)
-    print(" BASELINE RESEARCH - PRETRAINED MODELS EVALUATION")
+    print("  AgriKD — BASELINE MODEL SELECTION")
     print("="*70)
     
     # Set random seeds for reproducibility across ALL models
@@ -276,12 +244,10 @@ def main():
     print("\n[Step 1/6] Validating configuration...")
     Config.validate_config()
     
-    # Tạo folder riêng cho lần chạy này
+    # Create run-specific output folder
     run_folder, run_number = get_next_run_folder(Config.RESULTS_DIR)
-    print(f"\n📁 Lần chạy thứ: {run_number}")
-    print(f"📁 Kết quả sẽ được lưu tại: {run_folder}")
-    
-    # Create output directories
+    print(f"\n📁 Run #{run_number} → {run_folder}")
+
     os.makedirs(Config.CHECKPOINTS_DIR, exist_ok=True)
     
     # Set device
@@ -319,10 +285,9 @@ def main():
     
     # Warn if both WRS and Focal Loss are active
     if Config.USE_WEIGHTED_SAMPLER and Config.LOSS_FUNCTION == 'poly_focal':
-        print("\n⚠ WARNING: Cả WeightedRandomSampler và PolyFocalLoss đều đang BẬT!")
-        print("  → WRS xử lý imbalance ở data level (oversampling minority class)")
-        print("  → Focal Loss xử lý imbalance ở loss level (focus on hard examples)")
-        print("  → Có thể gây double-correction. Hãy cân nhắc tắt 1 trong 2 nếu kết quả không tốt.")
+        print("\n⚠ Both WeightedRandomSampler and PolyFocalLoss are active.")
+        print("  WRS rebalances at the data level; Focal Loss at the loss level.")
+        print("  This may double-correct for class imbalance — consider disabling one.")
     
     # ===================== CROSS-VALIDATION MODE (Pure K-Fold) =====================
     if Config.USE_CROSS_VALIDATION:
@@ -354,7 +319,7 @@ def main():
             fold_test_paths = [all_paths[i] for i in test_idx]
             fold_test_labels = [all_labels[i] for i in test_idx]
             
-            # Tách 1 phần từ train làm validation cho early stopping
+            # Split fold train into train + val for early stopping
             from sklearn.model_selection import train_test_split
             fold_train_paths, fold_val_paths, fold_train_labels, fold_val_labels = train_test_split(
                 fold_train_paths, fold_train_labels,
@@ -412,7 +377,7 @@ def main():
 
                     save_model_results(model_name, results, fold_folder)
 
-                    # === Chỉ giữ lại Strategy 1 checkpoint (best val_loss) của fold này ===
+                    # Keep only Strategy 1 checkpoint (best val_loss) for this fold
                     if os.path.exists(strategy_ckpt_dir):
                         pth_files = [f for f in os.listdir(strategy_ckpt_dir) if f.endswith('.pth')]
                         strategy1_src = os.path.join(strategy_ckpt_dir, 'Strategy_1_best.pth')
@@ -437,7 +402,7 @@ def main():
                         else:
                             print(f"    ⚠ Strategy 1 checkpoint not found in {strategy_ckpt_dir}")
 
-                    # Xóa training checkpoints (epoch_*.pth, best_checkpoint.pth, etc.)
+                    # Delete training checkpoints (epoch_*.pth, best_checkpoint.pth, etc.)
                     if os.path.exists(fold_ckpt_dir):
                         try:
                             shutil.rmtree(fold_ckpt_dir)
@@ -453,7 +418,7 @@ def main():
                     traceback.print_exc()
                     continue
         
-        # ===================== Tổng hợp kết quả CV =====================
+        # ===== Cross-Validation Summary =====
         print(f"\n{'='*70}")
         print(f" CROSS-VALIDATION SUMMARY ({Config.CV_N_SPLITS}-Fold)")
         print(f"{'='*70}")
@@ -485,7 +450,7 @@ def main():
 
         cv_summary_df = pd.DataFrame(cv_summary_rows)
 
-        # === Sheet 2: Fold Details — raw values per fold per model per strategy ===
+        # === Sheet 2: Fold Details — raw per-fold values ===
         cv_detail_rows = []
         for model_name, fold_results_list in all_fold_results.items():
             for fold_idx_0, fold_res in enumerate(fold_results_list):
@@ -501,7 +466,7 @@ def main():
         if not cv_detail_df.empty:
             cv_detail_df = cv_detail_df.sort_values(['Model', 'Fold', 'Strategy']).reset_index(drop=True)
 
-        # === Xuất Excel ===
+        # Export to Excel
         cv_excel_path = os.path.join(run_folder, 'cv_summary_results.xlsx')
         with pd.ExcelWriter(cv_excel_path, engine='openpyxl') as writer:
             cv_summary_df.to_excel(writer, sheet_name='CV Summary', index=False)
@@ -527,7 +492,7 @@ def main():
         print(f"{'='*70}")
         return
     
-    # ===================== NORMAL MODE (no CV) =====================
+    # ===== Normal Mode (no CV) =====
     # Create dataloaders
     train_loader, val_loader, test_loader = create_dataloaders(
         train_paths, train_labels,
