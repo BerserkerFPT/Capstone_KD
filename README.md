@@ -184,20 +184,6 @@ Key findings:
 | `USE_FOCAL_LOSS` | False | PolyFocalLoss instead of CE |
 | `HEURISTIC_WEIGHT_INIT_MODE` | False | Run λ heuristic initialisation experiments |
 
----
-
-## Citation
-
-If you use this code, please cite:
-
-```bibtex
-@article{agrikd2026,
-  title   = {AgriKD: Cross-Architecture Knowledge Distillation for Efficient Leaf Disease Classification},
-  author  = {Your Name et al.},
-  journal = {Your Journal/Conference},
-  year    = {2026}
-}
-```
 
 This work builds on the cross-architecture KD framework by:
 
