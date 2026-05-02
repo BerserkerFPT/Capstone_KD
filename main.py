@@ -377,30 +377,13 @@ def main():
 
                     save_model_results(model_name, results, fold_folder)
 
-                    # Keep only Strategy 1 checkpoint (best val_loss) for this fold
+                    # Keep best checkpoint for this fold
                     if os.path.exists(strategy_ckpt_dir):
-                        pth_files = [f for f in os.listdir(strategy_ckpt_dir) if f.endswith('.pth')]
-                        strategy1_src = os.path.join(strategy_ckpt_dir, 'Strategy_1_best.pth')
-                        strategy1_dst = os.path.join(strategy_ckpt_dir, f'strategy1_fold{fold_idx}_checkpoint.pth')
-
-                        # Rename Strategy 1 checkpoint to a stable name first (avoid collision)
-                        if os.path.exists(strategy1_src):
-                            os.rename(strategy1_src, strategy1_dst)
-
-                        # Delete all other strategy checkpoints
-                        for fname in pth_files:
-                            if fname == 'Strategy_1_best.pth':
-                                continue  # already renamed above
-                            fpath = os.path.join(strategy_ckpt_dir, fname)
-                            try:
-                                os.remove(fpath)
-                            except Exception as e:
-                                print(f"    ⚠ Could not delete {fname}: {e}")
-
-                        if os.path.exists(strategy1_dst):
-                            print(f"    ✓ Kept: Strategy 1 (best val_loss) → strategy1_fold{fold_idx}_checkpoint.pth")
-                        else:
-                            print(f"    ⚠ Strategy 1 checkpoint not found in {strategy_ckpt_dir}")
+                        ckpt_src = os.path.join(strategy_ckpt_dir, 'best_checkpoint_eval.pth')
+                        ckpt_dst = os.path.join(strategy_ckpt_dir, f'best_fold{fold_idx}.pth')
+                        if os.path.exists(ckpt_src):
+                            os.rename(ckpt_src, ckpt_dst)
+                            print(f"    ✓ Kept: best checkpoint → best_fold{fold_idx}.pth")
 
                     # Delete training checkpoints (epoch_*.pth, best_checkpoint.pth, etc.)
                     if os.path.exists(fold_ckpt_dir):
@@ -425,28 +408,27 @@ def main():
 
         metric_keys = ['Test Loss', 'Accuracy (%)', 'Precision (%)', 'Recall (%)', 'F1-Score (%)', 'AUC (%)']
 
-        # === Sheet 1: CV Summary — Mean ± Std per strategy per model ===
+        # === Sheet 1: CV Summary — Mean ± Std per model ===
         cv_summary_rows = []
+        eval_key = 'Best Checkpoint'
         for model_name, fold_results_list in all_fold_results.items():
-            strategy_names = list(fold_results_list[0].keys())
-            for strategy_name in strategy_names:
-                fold_metrics = []
-                for fold_res in fold_results_list:
-                    if strategy_name in fold_res:
-                        fold_metrics.append(fold_res[strategy_name]['metrics'])
-
-                if fold_metrics:
-                    row = {'Model': model_name, 'Strategy': strategy_name}
-                    for key in metric_keys:
-                        values = [m[key] for m in fold_metrics if key in m]
-                        if values:
-                            mean_v = np.mean(values)
-                            std_v  = np.std(values)
-                            fmt = '.4f' if key == 'Test Loss' else '.2f'
-                            row[f"{key} (mean)"] = round(mean_v, 4 if key == 'Test Loss' else 2)
-                            row[f"{key} (std)"]  = round(std_v,  4 if key == 'Test Loss' else 2)
-                            row[f"{key} (mean ± std)"] = f"{mean_v:{fmt}} ± {std_v:{fmt}}"
-                    cv_summary_rows.append(row)
+            fold_metrics = [
+                fold_res[eval_key]['metrics']
+                for fold_res in fold_results_list
+                if eval_key in fold_res
+            ]
+            if fold_metrics:
+                row = {'Model': model_name}
+                for key in metric_keys:
+                    values = [m[key] for m in fold_metrics if key in m]
+                    if values:
+                        mean_v = np.mean(values)
+                        std_v  = np.std(values)
+                        fmt = '.4f' if key == 'Test Loss' else '.2f'
+                        row[f"{key} (mean)"] = round(mean_v, 4 if key == 'Test Loss' else 2)
+                        row[f"{key} (std)"]  = round(std_v,  4 if key == 'Test Loss' else 2)
+                        row[f"{key} (mean ± std)"] = f"{mean_v:{fmt}} ± {std_v:{fmt}}"
+                cv_summary_rows.append(row)
 
         cv_summary_df = pd.DataFrame(cv_summary_rows)
 
@@ -454,9 +436,9 @@ def main():
         cv_detail_rows = []
         for model_name, fold_results_list in all_fold_results.items():
             for fold_idx_0, fold_res in enumerate(fold_results_list):
-                for strategy_name, result in fold_res.items():
-                    m = result['metrics']
-                    detail_row = {'Model': model_name, 'Fold': fold_idx_0 + 1, 'Strategy': strategy_name}
+                if eval_key in fold_res:
+                    m = fold_res[eval_key]['metrics']
+                    detail_row = {'Model': model_name, 'Fold': fold_idx_0 + 1}
                     for key in metric_keys:
                         if key in m:
                             detail_row[key] = round(m[key], 4 if key == 'Test Loss' else 2)
@@ -476,12 +458,11 @@ def main():
         print(f"  - Sheet 'CV Summary': Mean ± Std per strategy across {Config.CV_N_SPLITS} folds")
         print(f"  - Sheet 'Fold Details': Raw values per fold per strategy")
         
-        # In summary ra console
         print(f"\n{'='*70}")
-        print(f" CV SUMMARY (Mean ± Std per Strategy):")
+        print(f" CV SUMMARY (Mean ± Std):")
         print(f"{'='*70}")
         for _, row in cv_summary_df.iterrows():
-            print(f"  {row['Model']} - {row['Strategy']}:")
+            print(f"  {row['Model']}:")
             for key in metric_keys:
                 col = f"{key} (mean ± std)"
                 if col in row:
@@ -504,7 +485,6 @@ def main():
     
     # Step 3: Train and evaluate each model (one at a time to save disk space)
     print(f"\n[Step 3/6] Training and evaluating {len(Config.MODELS)} models...")
-    print("  Strategy: Train → Evaluate → Save Results → Delete Checkpoints")
     
     # Display dataset statistics once before training
     print("\n" + "="*70)
@@ -538,9 +518,8 @@ def main():
             )
             print(f"  ✓ Training completed for {model_name}")
             
-            # 3.2: Evaluate with 3 strategies
-            print(f"\n  [3.2] Evaluating {model_name} with 3 strategies...")
-            # Tạo folder lưu checkpoint cho các strategy
+            # 3.2: Evaluate using best checkpoint
+            print(f"\n  [3.2] Evaluating {model_name}...")
             strategy_checkpoint_dir = os.path.join(run_folder, model_name, 'checkpoints')
             results = evaluate_all_strategies(
                 model_name,
@@ -626,14 +605,14 @@ def main():
     print(f"  - Only results (Excel + Charts) kept")
     print(f"  - Estimated space saved: ~160GB (checkpoints)")
     
-    # Find best model (based on Strategy 1 F1-Score)
-    strategy_1_df = df[df['Strategy'] == 'Strategy 1']
-    best_idx = strategy_1_df['F1-Score (%)'].idxmax()
-    best_model = strategy_1_df.loc[best_idx, 'Model']
-    best_f1 = strategy_1_df.loc[best_idx, 'F1-Score (%)']
-    best_acc = strategy_1_df.loc[best_idx, 'Accuracy (%)']
-    
-    print(f"\n🏆 Best Model (Strategy 1):")
+    # Find best model (highest F1-Score, best checkpoint)
+    best_df = df[df['Strategy'] == 'Best Checkpoint']
+    best_idx = best_df['F1-Score (%)'].idxmax()
+    best_model = best_df.loc[best_idx, 'Model']
+    best_f1   = best_df.loc[best_idx, 'F1-Score (%)']
+    best_acc  = best_df.loc[best_idx, 'Accuracy (%)']
+
+    print(f"\n🏆 Best Model:")
     print(f"  Model: {best_model}")
     print(f"  Accuracy: {best_acc:.2f}%")
     print(f"  F1-Score: {best_f1:.2f}%")

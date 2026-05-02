@@ -305,12 +305,9 @@ def _print_eval_results(metrics, per_class, prefix="    ", header="TEST RESULTS"
 def strategy_1_best_checkpoint(model_name, checkpoint_manager, test_loader, num_classes, device, class_names=None, save_dir=None):
     """
     Strategy 1: Evaluate best checkpoint based on lowest val_loss
-
-    Returns:
-        result: Dictionary with 'metrics', 'per_class', 'confusion_matrix'
+    # NOTE: Disabled — evaluation logic moved to evaluate_all_strategies().
     """
-
-    print(f"\n  Strategy 1: Best checkpoint (lowest val_loss)")
+    return  # disabled
 
     # Get best checkpoint
     epoch, val_loss, checkpoint_path = checkpoint_manager.get_best_checkpoint()
@@ -345,14 +342,10 @@ def strategy_1_best_checkpoint(model_name, checkpoint_manager, test_loader, num_
 
 def strategy_2_top_k_average(model_name, checkpoint_manager, test_loader, train_loader, num_classes, device, class_names=None, save_dir=None):
     """
-    Strategy 2: Average top-K checkpoints and evaluate
-    CRITICAL: Update BatchNorm stats after loading averaged weights
-
-    Returns:
-        results: Dictionary with k as key and result dict as value
+    Strategy 2: Average top-K checkpoints and evaluate.
+    # NOTE: Disabled — not reported in paper.
     """
-
-    print(f"\n  Strategy 2: Top-K checkpoint averaging")
+    return  # disabled
 
     results = {}
 
@@ -403,14 +396,10 @@ def strategy_2_top_k_average(model_name, checkpoint_manager, test_loader, train_
 
 def strategy_3_last_n_average(model_name, checkpoint_manager, test_loader, train_loader, num_classes, device, class_names=None, save_dir=None):
     """
-    Strategy 3: Average last N epoch checkpoints
-    CRITICAL: This is the most important strategy - must update BatchNorm stats!
-
-    Returns:
-        result: Dictionary with 'metrics', 'per_class', 'confusion_matrix'
+    Strategy 3: Average last N epoch checkpoints.
+    # NOTE: Disabled — not reported in paper.
     """
-
-    print(f"\n  Strategy 3: Last {Config.LAST_N_EPOCHS} epochs averaging")
+    return  # disabled
 
     # Get last N checkpoints
     last_n = checkpoint_manager.get_last_n_checkpoints(Config.LAST_N_EPOCHS)
@@ -456,47 +445,46 @@ def strategy_3_last_n_average(model_name, checkpoint_manager, test_loader, train
 
 def evaluate_all_strategies(model_name, checkpoint_manager, test_loader, train_loader, num_classes, device, class_names=None, save_dir=None):
     """
-    Evaluate all 3 strategies for a model
-
-    Args:
-        model_name: Model name
-        checkpoint_manager: Checkpoint manager
-        test_loader: Test data loader
-        train_loader: Training data loader (needed for BatchNorm update in averaging strategies)
-        num_classes: Number of classes
-        device: Device
-        class_names: List of class names
-        save_dir: Directory to save strategy checkpoints (None = don't save)
+    Evaluate a model using its best validation checkpoint (lowest val_loss).
 
     Returns:
-        all_results: Dictionary with strategy name as key and result dict as value.
-                     Each result dict has keys: 'metrics', 'per_class', 'confusion_matrix'
+        dict with key 'Best Checkpoint' → {'metrics', 'per_class', 'confusion_matrix'}
     """
-
     print(f"\n{'='*70}")
     print(f"Evaluating {model_name}")
     print(f"{'='*70}")
 
-    all_results = {}
+    # Load best checkpoint
+    epoch, val_loss, checkpoint_path = checkpoint_manager.get_best_checkpoint()
+    print(f"  Best checkpoint: Epoch {epoch}, Val Loss: {val_loss:.4f}")
 
-    # Strategy 1: Best single checkpoint (no averaging, no BN update needed)
-    all_results['Strategy 1'] = strategy_1_best_checkpoint(
-        model_name, checkpoint_manager, test_loader, num_classes, device, class_names, save_dir=save_dir
-    )
+    model = get_model(model_name, num_classes, freeze_backbone=False)
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model = model.to(device)
 
-    # Strategy 2: Top-K averaging (with BN update)
-    strategy_2_results = strategy_2_top_k_average(
-        model_name, checkpoint_manager, test_loader, train_loader, num_classes, device, class_names, save_dir=save_dir
-    )
-    for k, result in strategy_2_results.items():
-        all_results[f'Strategy 2 (K={k})'] = result
+    result = evaluate_model(model, test_loader, device, num_classes, class_names)
 
-    # Strategy 3: Last N epochs averaging (with BN update - MOST CRITICAL)
-    all_results['Strategy 3'] = strategy_3_last_n_average(
-        model_name, checkpoint_manager, test_loader, train_loader, num_classes, device, class_names, save_dir=save_dir
-    )
+    _print_eval_results(result['metrics'], result['per_class'],
+                        prefix="  ", header="TEST RESULTS")
 
-    return all_results
+    if save_dir:
+        os.makedirs(save_dir, exist_ok=True)
+        save_path = os.path.join(save_dir, 'best_checkpoint_eval.pth')
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            'epoch': epoch,
+            'val_loss': val_loss
+        }, save_path)
+        print(f"  ✓ Checkpoint saved: {save_path}")
+
+    return {'Best Checkpoint': result}
+
+
+# =============================================================================
+# NOTE: Strategy 1 / 2 / 3 functions above are disabled (kept for reference).
+# evaluate_all_strategies() now evaluates using the best checkpoint directly.
+# =============================================================================
 
 
 def export_results_to_excel(all_model_results, output_path, class_names=None):

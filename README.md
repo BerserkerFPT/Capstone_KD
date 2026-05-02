@@ -31,10 +31,7 @@ For each model listed in `Config.MODELS`, the pipeline:
 
 1. Splits the dataset (70 / 15 / 15 train/val/test, stratified)
 2. Trains the model with cosine-annealing LR + warmup + early stopping
-3. Evaluates using **three checkpoint strategies**:
-   - **Strategy 1** — best validation checkpoint
-   - **Strategy 2** — weight-average of Top-K best checkpoints (K ∈ {2, 3, 4, 5})
-   - **Strategy 3** — weight-average of last N epoch checkpoints
+3. Evaluates on the test set using the best validation checkpoint
 4. Exports macro and per-class metrics to Excel
 5. Generates training curves and confusion matrices
 
@@ -124,7 +121,6 @@ Results are saved to `results/<run_number>/`:
 | **Training** | `NUM_EPOCHS` | `50` | Maximum training epochs |
 | | `LEARNING_RATE` | `9e-7` | Initial LR |
 | | `EARLY_STOPPING_PATIENCE` | `10` | Stop if no val_loss improvement |
-| **Imbalance** | `USE_WEIGHTED_SAMPLER` | `True` | Inverse-frequency WeightedRandomSampler |
 | | `LOSS_FUNCTION` | `'cross_entropy'` | `'cross_entropy'` or `'poly_focal'` |
 | **Cross-Val** | `USE_CROSS_VALIDATION` | `False` | Enable Stratified K-Fold CV |
 | | `CV_N_SPLITS` | `5` | Number of folds |
